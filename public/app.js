@@ -224,9 +224,11 @@ function fmtEur(n) {
 }
 
 function renderOverviewTable(agg) {
-  const headers = ["", "Full Name", "Symbol", "Shares", "Price/Share", "Value (EUR)",
+  const headers = ["", "Full Name", "Symbol", "Shares", "Price/Share", "Value (EUR)", "Weight %",
     "Expense Ratio", "Total Holdings", "Top 10 Holdings Percentage", "Assets", "P/E Ratio"];
-  const rightCols = new Set([3, 4, 5, 6, 7, 8, 9, 10]);
+  const rightCols = new Set([3, 4, 5, 6, 7, 8, 9, 10, 11]);
+  const total = agg.totalWithCash;
+  const weightStr = (v) => (v != null && total ? `${((v / total) * 100).toFixed(2)}%` : "");
 
   let html = '<table class="tbl"><thead><tr>';
   headers.forEach((h, i) => { html += `<th${rightCols.has(i) ? ' class="num"' : ""}>${h}</th>`; });
@@ -265,6 +267,7 @@ function renderOverviewTable(agg) {
     html += `<td class="num"><input class="shares" type="number" value="${shares}" placeholder="shares" oninput="onSharesInput(${idx}, this.value)" onchange="commitRow(${idx})" onkeydown="commitOnEnter(event, () => commitRow(${idx}))"></td>`;
     html += `<td class="num">${priceStr}</td>`;
     html += `<td class="num">${valueEur != null ? fmtEur(valueEur) : ""}</td>`;
+    html += `<td class="num">${weightStr(valueEur)}</td>`;
     html += `<td class="num">${expRatio}</td>`;
     html += `<td class="num">${totalHold}</td>`;
     html += `<td class="num">${top10}</td>`;
@@ -277,12 +280,14 @@ function renderOverviewTable(agg) {
   html += "<tr>";
   html += "<td></td><td>Cash</td><td></td><td></td><td></td>";
   html += `<td class="num"><input class="shares" type="number" value="${cashEur}" oninput="onCashInput(this.value)" onchange="commitCash()" onkeydown="commitOnEnter(event, commitCash)"></td>`;
+  html += `<td class="num">${weightStr(cashEur)}</td>`;
   html += "<td></td><td></td><td></td><td></td><td></td>";
   html += "</tr>";
 
   // Total row
   html += `<tr><td></td><td><b>Total</b></td><td></td><td></td><td></td>`;
   html += `<td class="num"><b>${fmtEur(agg.totalWithCash)}</b></td>`;
+  html += `<td class="num"><b>${weightStr(total)}</b></td>`;
   html += "<td></td><td></td><td></td><td></td><td></td></tr>";
 
   html += "</tbody></table>";
@@ -325,6 +330,7 @@ function renderPieChart(containerId, canvasId, title, items, opts) {
   const widthPx = opts.widthPx || 480; // a number (px) or a CSS width string like "100%"
   const heightPx = opts.heightPx || 320;
   const legendLabelFn = opts.legendLabelFn || null; // (label, value, extra) => legend text
+  const tooltipLabelFn = opts.tooltipLabelFn || null; // (label, value, extra) => tooltip text
 
   // items may be [label, value] or [label, value, extra] (extra is passed
   // through to legendLabelFn, e.g. a holding's full name alongside its symbol).
@@ -360,6 +366,16 @@ function renderPieChart(containerId, canvasId, title, items, opts) {
     };
   }
 
+  const tooltip = {};
+  if (tooltipLabelFn) {
+    tooltip.callbacks = {
+      label: (context) => {
+        const entry = list[context.dataIndex];
+        return entry ? tooltipLabelFn(entry[0], entry[1], entry[2]) : context.label;
+      },
+    };
+  }
+
   charts[canvasId] = new Chart(ctx, {
     type: "pie",
     data: {
@@ -370,6 +386,7 @@ function renderPieChart(containerId, canvasId, title, items, opts) {
       plugins: {
         title: { display: !!title, text: title || "" },
         legend: { position: legendPosition, labels: legendLabels },
+        tooltip,
       },
     },
   });
@@ -379,9 +396,14 @@ function renderOverviewChart(agg) {
   const items = agg.rowInfos.filter((ri) => ri.valueEur).map((ri) => [ri.data.fullName, ri.valueEur]);
   if (cashEur) items.push(["Cash", cashEur]);
   const total = agg.totalWithCash;
-  renderPieChart("chart-overview", "chartOverviewCanvas", "Portfolio Allocation by Value (EUR)", items, {
+  const weightLabel = (label, value) => `${label}: ${total ? ((value / total) * 100).toFixed(2) : "0.00"}%`;
+  // No chart title — kept redundant with the "Aggregate — Portfolio
+  // Overview" h2 above it. Legend and hover tooltip both show weight %
+  // instead of the raw EUR value the slices are actually sized by.
+  renderPieChart("chart-overview", "chartOverviewCanvas", "", items, {
     legendPosition: "bottom", widthPx: 760, heightPx: 420,
-    legendLabelFn: (label, value) => `${label}: ${total ? ((value / total) * 100).toFixed(2) : "0.00"}%`,
+    legendLabelFn: weightLabel,
+    tooltipLabelFn: weightLabel,
   });
 }
 
