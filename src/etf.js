@@ -1,4 +1,4 @@
-// Cloudflare Pages Function — GET /api/etf?exchange=lon&symbol=EXUS
+// ETF data fetching — shared logic used by the Worker's /api/etf route.
 //
 // Runs server-side on Cloudflare's edge, so it can freely call
 // stockanalysis.com / query1.finance.yahoo.com / api.frankfurter.app
@@ -10,33 +10,6 @@
 //   holdings: {no, s, n, as}   sectors: {n, w}   countries: {country, weight}
 //   stats:    {count, top10, aum, peRatio, assetClass, category, categoryLabel}
 //   expense ratio: only on the overview page (not /holdings/)
-
-export async function onRequestGet(context) {
-  const url = new URL(context.request.url);
-  const exchange = (url.searchParams.get("exchange") || "").toLowerCase().trim();
-  const symbol = (url.searchParams.get("symbol") || "").toUpperCase().trim();
-
-  if (!exchange || !symbol) {
-    return jsonResponse({ error: "exchange and symbol query params are required" }, 400);
-  }
-
-  try {
-    const result = await loadEtf(exchange, symbol);
-    return jsonResponse(result);
-  } catch (err) {
-    return jsonResponse({ error: String(err && err.message ? err.message : err) }, 500);
-  }
-}
-
-function jsonResponse(obj, status = 200) {
-  return new Response(JSON.stringify(obj), {
-    status,
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-      "cache-control": "public, max-age=1800", // 30 min edge cache — this data doesn't change intraday
-    },
-  });
-}
 
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36";
@@ -253,7 +226,7 @@ async function fxRateToEur(currency) {
   return j.rates.EUR;
 }
 
-async function loadEtf(exchange, symbol) {
+export async function loadEtf(exchange, symbol) {
   const notes = [];
   const holdingsPath = `/quote/${exchange}/${symbol}/holdings/`;
   const sourceUrl = `https://stockanalysis.com${holdingsPath}`;

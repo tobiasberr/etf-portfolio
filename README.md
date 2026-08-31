@@ -7,43 +7,44 @@ automatically. A new empty row appears whenever you fill in the last one.
 
 ## How it's built
 
-- `index.html` + `app.js` — the frontend (editable table, aggregation,
-  Chart.js pie charts). Plain JS, no build step, no framework.
-- `functions/api/etf.js` — a **Cloudflare Pages Function**. This runs
-  server-side on Cloudflare's edge, not in the browser, so it can call
-  stockanalysis.com / Yahoo Finance / frankfurter.app directly without
-  hitting browser CORS restrictions.
+This is a **Cloudflare Worker with static assets** (the modern
+replacement for Cloudflare Pages + Pages Functions):
+
+- `public/index.html` + `public/app.js` — the frontend (editable table,
+  aggregation, Chart.js pie charts). Plain JS, no build step, no
+  framework. Served as static assets.
+- `src/worker.js` — the Worker entry point. Routes `GET /api/etf` to the
+  ETF-fetching logic below; everything else falls through to the static
+  assets in `public/`.
+- `src/etf.js` — runs server-side on Cloudflare's edge, not in the
+  browser, so it can call stockanalysis.com / Yahoo Finance /
+  frankfurter.app directly without hitting browser CORS restrictions.
+- `wrangler.toml` — declares the Worker entry point (`main`) and the
+  static assets directory (`[assets] directory = "./public"`).
 
 No API keys or secrets are needed — everything it calls is a free,
 unauthenticated endpoint.
 
-## Deploy to Cloudflare Pages
+## Deploy to Cloudflare
 
-**Cloudflare's dashboard "Upload assets" (drag-and-drop) does NOT support
-the `functions/` folder — this is a documented Cloudflare limitation, not
-a mistake in this project.** Use one of these two methods instead:
-
-**Option A — Wrangler CLI (recommended)**
+**Option A — Wrangler CLI**
 
 ```bash
 npm install -g wrangler
 wrangler login
-wrangler pages deploy .
+wrangler deploy
 ```
 
-The first run will ask you to create a new Pages project (pick a name).
-Because you run this from inside the repo root, Wrangler automatically
-detects and uploads the `functions/` folder along with the static files
-— this is the key difference from the dashboard's drag-and-drop, which
-silently ignores `functions/`.
+The first run will ask you to create a new Worker (pick a name, or keep
+the one in `wrangler.toml`).
 
 **Option B — GitHub (used for this repo)**
 
-In the Cloudflare dashboard choose **Workers & Pages → Create → Pages →
-Connect to Git**, and point it at this repo (`tobiasberr/etf-portfolio`).
-Leave the build command empty and the output directory as `/` (root) —
-there's nothing to build. Git-integrated deployments support Functions,
-and every push to the connected branch redeploys automatically.
+In the Cloudflare dashboard choose **Compute (Workers) → Create → Import
+a repository**, and point it at this repo (`tobiasberr/etf-portfolio`).
+Leave the deploy command as the default (`npx wrangler deploy`) — the
+`wrangler.toml` in this repo tells it what to build and where the static
+assets live. Every push to the connected branch redeploys automatically.
 
 ## Using it
 
