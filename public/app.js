@@ -139,10 +139,13 @@ function commitRow(idx) {
   ensureTrailingEmptyRow();
   saveState();
   if (row.exchange && row.symbol) {
+    // If exchange/symbol is already cached, ensureData() resolves
+    // immediately without rendering (it only renders around an actual
+    // fetch) — so always renderAll() here too, to pick up e.g. a
+    // changed Shares value against already-cached price data.
     ensureData(row.exchange, row.symbol);
-  } else {
-    renderAll();
   }
+  renderAll();
 }
 
 function commitCash() {
