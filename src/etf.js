@@ -165,55 +165,10 @@ function flattenStats(container) {
   return stats;
 }
 
-// The overview page's price isn't in infoBox/infoTable/trust/quote/stats
-// (confirmed against a real payload — those hold marketCap/EPS/P-E/AUM/
-// etc. but no price) — it lives somewhere else in the decoded nodes.
-// Rather than guess another fixed container name, search for whichever
-// object actually looks like a quote: something with a numeric "price"
-// plus at least one sibling field a quote header would have.
-const QUOTE_SIBLING_KEYS = ["change", "changePercent", "open", "high", "low", "close", "previousClose", "volume", "currency"];
-
-function findQuoteObject(nodes) {
-  const seen = new Set();
-  function walk(obj, depth) {
-    if (depth > 5 || obj == null || typeof obj !== "object" || seen.has(obj)) return null;
-    seen.add(obj);
-    if (!Array.isArray(obj)) {
-      const price = obj.price;
-      const hasSibling = QUOTE_SIBLING_KEYS.some((k) => k in obj);
-      if ((typeof price === "number" || typeof price === "string") && hasSibling) return obj;
-    }
-    const children = Array.isArray(obj) ? obj : Object.values(obj);
-    for (const child of children) {
-      if (child && typeof child === "object") {
-        const found = walk(child, depth + 1);
-        if (found) return found;
-      }
-    }
-    return null;
-  }
-  for (const node of nodes) {
-    const found = walk(node, 0);
-    if (found) return found;
-  }
-  return null;
-}
-
 function findStat(stats, ...keywords) {
   for (const [k, v] of Object.entries(stats)) {
     const kl = k.toLowerCase();
     if (keywords.some((kw) => kl.includes(kw))) return v;
-  }
-  return null;
-}
-
-// Exact (not substring) label match — needed for "Price" specifically,
-// since a substring match against "price" would just as happily return
-// "Price / Book", "Price / Sales", "Price Target", etc.
-function findExactStat(stats, ...labels) {
-  const wanted = new Set(labels.map((l) => l.toLowerCase()));
-  for (const [k, v] of Object.entries(stats)) {
-    if (wanted.has(k.toLowerCase())) return v;
   }
   return null;
 }
@@ -507,12 +462,11 @@ export async function loadEtf(exchange, symbol) {
   }
 
   // Expense ratio: overview page only (confirmed not present on /holdings/).
-  // Also grab whatever price/AUM/P-E/top10 stats are on this page — the
-  // primary price source below (ahead of the Yahoo Finance fallback), and
-  // a fallback for assets/peRatio/top10Pct/totalHoldings whenever the
-  // holdings page didn't have them (including when it's missing entirely).
+  // Also grab whatever AUM/P-E/top10 stats are on this page, as a fallback
+  // for assets/peRatio/top10Pct/totalHoldings whenever the holdings page
+  // didn't have them (including when it's missing entirely). Price itself
+  // comes from Yahoo Finance only — see fetchPrice() below.
   let ovStats = {};
-  let quoteObj = null;
   try {
     const ovNodes = await fetchPageNodes(overviewPath);
     for (const obj of ovNodes) {
@@ -522,13 +476,6 @@ export async function loadEtf(exchange, symbol) {
           if (key in obj) ovStats = { ...ovStats, ...flattenStats(obj[key]) };
         }
       }
-    }
-
-    quoteObj = findQuoteObject(ovNodes);
-    if (quoteObj) {
-      ovStats = { ...ovStats, ...flattenStats(quoteObj) };
-    } else {
-      notes.push("could not locate a price/quote object anywhere in the overview page data");
     }
 
     const exp = findStat(ovStats, "expense");
@@ -562,44 +509,13 @@ export async function loadEtf(exchange, symbol) {
     notes.push(`overview page fetch failed: ${e.message}`);
   }
 
-  // Primary source: the quote object found on stockanalysis.com's own
-  // overview page. Price and currency MUST come from that same object,
-  // never mixed with a currency guessed from elsewhere — confirmed on
-  // lon/EXUS that stockanalysis.com can display a price in a DIFFERENT
-  // currency than the exchange's own local trading currency ("Currency
-  // is GBP · Price in USD" — a UK-listed fund priced in USD there), so
-  // an exchange->currency fallback table would silently pair a real
-  // price number with the wrong currency and produce a plausible-looking
-  // but wrong EUR conversion. A stockanalysis price with no matching
-  // currency on the same object is discarded rather than guessed at.
-  let price = null;
-  let currency = null;
-  let priceError = null;
-
-  if (quoteObj) {
-    const saPrice = numOrNullLoose(quoteObj.price);
-    const rawCurrency = quoteObj.currency ?? quoteObj.priceCurrency ?? quoteObj.quoteCurrency ?? quoteObj.displayCurrency;
-    const saCurrency = typeof rawCurrency === "string" && rawCurrency.trim() ? rawCurrency.trim().toUpperCase() : null;
-    if (saPrice != null && saCurrency) {
-      price = saPrice;
-      currency = saCurrency;
-    } else if (saPrice != null) {
-      notes.push(`stockanalysis.com price found (${saPrice}) but no currency field on the same quote object — not using it, to avoid pairing it with the wrong currency`);
-    }
-  }
-
-  // Fallback: Yahoo Finance, for listings stockanalysis.com's overview
-  // page didn't have a usable price+currency pair for.
-  if (price == null) {
-    const yahoo = await fetchPrice(exchange, symbol);
-    if (yahoo.price != null && yahoo.currency) {
-      price = yahoo.price;
-      currency = yahoo.currency;
-      notes.push("price sourced from Yahoo Finance (no usable price+currency from stockanalysis.com's overview page)");
-    } else {
-      priceError = yahoo.error || "price unavailable";
-    }
-  }
+  // Price comes from Yahoo Finance only (via YAHOO_SUFFIX above) — it
+  // always pairs its own price with its own currency, so it can't have
+  // the mismatch risk a stockanalysis.com-derived price/currency pairing
+  // would (confirmed there: lon/EXUS reads "Currency is GBP · Price in
+  // USD" on stockanalysis.com's own page — a price in a currency
+  // different from the exchange's local trading currency).
+  const { price, currency, error: priceError } = await fetchPrice(exchange, symbol);
 
   let priceEur = null;
   if (price != null && currency) {
