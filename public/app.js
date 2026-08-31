@@ -191,8 +191,12 @@ function computeAggregate() {
         countries[name] = (countries[name] || 0) + p * w;
       }
       for (const h of ri.data.holdings || []) {
+        // Dedup key falls back to name for symbol-less holdings (cash
+        // lines etc.), so two different ones don't collide — but the
+        // stored symbol stays the real (possibly empty) one, not the
+        // key, so rendering can tell a real symbol from a name fallback.
         const key = h.symbol || h.name;
-        if (!holdingsMap[key]) holdingsMap[key] = { symbol: key, name: h.name, weightPct: 0 };
+        if (!holdingsMap[key]) holdingsMap[key] = { symbol: h.symbol, name: h.name, weightPct: 0 };
         holdingsMap[key].weightPct += h.weightPct * w;
       }
     }
@@ -302,7 +306,9 @@ function renderWeightTable(containerId, headers, rows2d, rightCols) {
 
 function renderHoldingsTable(agg) {
   const rows2d = agg.holdingsList.map((h) => [
-    `<a href="https://www.gurufocus.com/stock/${encodeURIComponent(h.symbol)}/summary" target="_blank">${escapeHtml(h.symbol)}</a>`,
+    h.symbol
+      ? `<a href="https://www.gurufocus.com/stock/${encodeURIComponent(h.symbol)}/summary" target="_blank">${escapeHtml(h.symbol)}</a>`
+      : "—", // cash/other lines (no ticker) — no gurufocus link to point at
     escapeHtml(h.name),
     `${h.weightPct.toFixed(2)}%`,
   ]);
@@ -390,11 +396,14 @@ function renderCountryChart(agg) {
 function renderHoldingsChart(agg) {
   const knownPct = agg.holdingsList.reduce((s, h) => s + h.weightPct, 0);
   const gap = Math.max(0, 100 - knownPct);
-  const items = agg.holdingsList.map((h) => [h.symbol, h.weightPct, h.name]);
+  // Cash/other lines have no symbol — use the name as the slice's label
+  // instead (so it isn't blank), and pass null as the legend's "extra"
+  // name so the legend doesn't show the name twice.
+  const items = agg.holdingsList.map((h) => [h.symbol || h.name, h.weightPct, h.symbol ? h.name : null]);
   if (gap > 0.01) items.push(["Not in published Top 25 (per ETF)", gap, null]);
   renderPieChart("chart-holdings", "chartHoldingsCanvas", "Top Holdings", items, {
-    legendLabelFn: (symbol, weight, name) =>
-      name ? `${symbol} · ${name} · ${weight.toFixed(2)}%` : `${symbol}: ${weight.toFixed(2)}%`,
+    legendLabelFn: (label, weight, name) =>
+      name ? `${label} · ${name} · ${weight.toFixed(2)}%` : `${label}: ${weight.toFixed(2)}%`,
   });
 }
 

@@ -385,9 +385,15 @@ export async function loadEtf(exchange, symbol) {
 
   if (data) {
     for (const h of (data.holdings || []).slice(0, 25)) {
+      // Cash/other lines (e.g. "Capital Cash Ctrl", "Usd Capital Cash")
+      // come through with a placeholder like "n/a" for the symbol —
+      // normalize that to "" so it's treated as no symbol, not as a
+      // literal (and possibly shared-across-entries) ticker.
+      const rawSymbol = cleanSymbol(h.s);
+      const symbol = rawSymbol && rawSymbol.toLowerCase() !== "n/a" ? rawSymbol : "";
       holdings.push({
         rank: String(h.no ?? ""),
-        symbol: cleanSymbol(h.s),
+        symbol,
         name: h.n || "",
         weightPct: pct(h.as),
       });
