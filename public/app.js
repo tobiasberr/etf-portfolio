@@ -332,15 +332,26 @@ function renderPieChart(containerId, canvasId, title, items, opts) {
   const legendLabelFn = opts.legendLabelFn || null; // (label, value, extra) => legend text
   const tooltipLabelFn = opts.tooltipLabelFn || null; // (label, value, extra) => tooltip text
 
-  // items may be [label, value] or [label, value, extra] (extra is passed
-  // through to legendLabelFn, e.g. a holding's full name alongside its symbol).
-  let list = items.filter(([, v]) => v).map(([k, v, extra]) => [String(k), Number(v), extra]);
-  list.sort((a, b) => b[1] - a[1]);
-  if (list.length > PIE_MAX_SLICES) {
-    const head = list.slice(0, PIE_MAX_SLICES);
-    const other = list.slice(PIE_MAX_SLICES).reduce((s, [, v]) => s + v, 0);
-    list = head.concat([["Other", other, null]]);
+  // items are [label, value], [label, value, extra] (passed through to
+  // legendLabelFn/tooltipLabelFn, e.g. a holding's name alongside its
+  // symbol), or [label, value, extra, pinned] — a pinned item always
+  // gets its own slice, bypassing the top-N/"Other" cutoff below (used
+  // for cash/other holdings, which could otherwise be small enough to
+  // vanish into "Other" like any other minor holding would).
+  const all = items.filter(([, v]) => v).map(([k, v, extra, pinned]) => [String(k), Number(v), extra, !!pinned]);
+  const pinnedList = all.filter((e) => e[3]);
+  const rest = all.filter((e) => !e[3]);
+  rest.sort((a, b) => b[1] - a[1]);
+  const restBudget = Math.max(0, PIE_MAX_SLICES - pinnedList.length);
+  let list;
+  if (rest.length > restBudget) {
+    const head = rest.slice(0, restBudget);
+    const other = rest.slice(restBudget).reduce((s, [, v]) => s + v, 0);
+    list = pinnedList.concat(head, other > 0 ? [["Other", other, null, false]] : []);
+  } else {
+    list = pinnedList.concat(rest);
   }
+  list.sort((a, b) => b[1] - a[1]);
 
   const container = document.getElementById(containerId);
   if (!list.length) {
@@ -433,10 +444,12 @@ function renderHoldingsChart(agg) {
   const knownPct = agg.holdingsList.reduce((s, h) => s + h.weightPct, 0);
   const gap = Math.max(0, 100 - knownPct);
   // Cash/other lines have no symbol — use the name as the slice's label
-  // instead (so it isn't blank), and pass null as the legend's "extra"
-  // name so the legend doesn't show the name twice.
-  const items = agg.holdingsList.map((h) => [h.symbol || h.name, h.weightPct, h.symbol ? h.name : null]);
-  if (gap > 0.01) items.push(["Not in published Top 25 (per ETF)", gap, null]);
+  // instead (so it isn't blank), pass null as the legend's "extra" name
+  // so the legend doesn't show the name twice, and pin them so they
+  // always get their own slice rather than risking getting folded into
+  // "Other" like any other small holding would.
+  const items = agg.holdingsList.map((h) => [h.symbol || h.name, h.weightPct, h.symbol ? h.name : null, !h.symbol]);
+  if (gap > 0.01) items.push(["Not in published Top 25 (per ETF)", gap, null, false]);
   const holdingLabel = (label, weight, name) =>
     name ? `${label} · ${name} · ${weight.toFixed(2)}%` : `${label}: ${weight.toFixed(2)}%`;
   // No chart title — the "Aggregated Top Holdings" <h3> above it already says this.
