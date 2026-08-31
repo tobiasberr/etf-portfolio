@@ -539,10 +539,10 @@ function renderOverviewChart(agg) {
   const weightLabel = (label, value) => `${label}: ${total ? ((value / total) * 100).toFixed(2) : "0.00"}%`;
   // No chart title. Legend and hover tooltip both show weight % instead
   // of the raw EUR value the slices are actually sized by. Legend on the
-  // right (not bottom). Capped at a fifth of the viewport width, like
-  // the other three pie charts.
+  // right (not bottom). 60vw wide (3x the previous 20vw), like the
+  // other three pie charts.
   renderPieChart("chart-overview", "chartOverviewCanvas", "", items, {
-    legendPosition: "right", widthPx: "20vw", heightPx: 300,
+    legendPosition: "right", widthPx: "60vw", heightPx: 900,
     legendLabelFn: weightLabel,
     tooltipLabelFn: weightLabel,
   });
@@ -552,7 +552,7 @@ function renderSectorChart(agg) {
   // No chart title — the "Aggregated Sector Weights" <h3> above it already says this.
   const weightLabel = (label, value) => `${label}: ${value.toFixed(2)}%`;
   renderPieChart("chart-sector", "chartSectorCanvas", "", agg.sectorList, {
-    widthPx: "20vw", heightPx: 260,
+    widthPx: "60vw", heightPx: 780,
     legendLabelFn: weightLabel,
     tooltipLabelFn: weightLabel,
   });
@@ -562,7 +562,7 @@ function renderCountryChart(agg) {
   // No chart title — the "Aggregated Country Weights" <h3> above it already says this.
   const weightLabel = (label, value) => `${label}: ${value.toFixed(2)}%`;
   renderPieChart("chart-country", "chartCountryCanvas", "", agg.countryList, {
-    widthPx: "20vw", heightPx: 260,
+    widthPx: "60vw", heightPx: 780,
     legendLabelFn: weightLabel,
     tooltipLabelFn: weightLabel,
   });
@@ -582,7 +582,7 @@ function renderHoldingsChart(agg) {
     name ? `${label} · ${name} · ${weight.toFixed(2)}%` : `${label}: ${weight.toFixed(2)}%`;
   // No chart title — the "Aggregated Top Holdings" <h3> above it already says this.
   renderPieChart("chart-holdings", "chartHoldingsCanvas", "", items, {
-    widthPx: "20vw", heightPx: 300,
+    widthPx: "60vw", heightPx: 900,
     legendLabelFn: holdingLabel,
     tooltipLabelFn: holdingLabel,
   });
