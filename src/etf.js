@@ -14,7 +14,57 @@
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36";
 
-const YAHOO_SUFFIX = { lon: "L", bit: "MI", etr: "DE", fra: "F" };
+// Maps a stockanalysis.com exchange code (as used in /quote/<exchange>/<symbol>/)
+// to the suffix Yahoo Finance expects on its own ticker for that listing.
+// "" means Yahoo uses the bare ticker (US exchanges). This intentionally
+// covers all the major currencies an international ETF/stock portfolio
+// is likely to hold, not just the four European exchanges we started with.
+const YAHOO_SUFFIX = {
+  // Americas
+  nyse: "", nasdaq: "", amex: "", nyseamerican: "", otc: "",
+  tsx: "TO", tsxv: "V", cse: "CN", neo: "NE", // Canada (CAD)
+  bvmf: "SA", // Brazil (BRL)
+  bcba: "BA", // Argentina (ARS)
+  bmv: "MX", // Mexico (MXN)
+  // UK & Ireland
+  lon: "L", ise: "IR",
+  // Eurozone
+  etr: "DE", fra: "F", ber: "BE", stu: "SG", mun: "MU", dus: "DU", // Germany
+  bit: "MI", // Italy
+  par: "PA", // France
+  ams: "AS", // Netherlands
+  bru: "BR", // Belgium
+  lis: "LS", // Portugal
+  mce: "MC", bme: "MC", // Spain
+  vie: "VI", // Austria
+  hel: "HE", // Finland
+  // Other Europe
+  swx: "SW", vtx: "SW", // Switzerland (CHF)
+  sto: "ST", // Sweden (SEK)
+  cph: "CO", // Denmark (DKK)
+  osl: "OL", // Norway (NOK)
+  wse: "WA", // Poland (PLN)
+  // Asia-Pacific
+  asx: "AX", // Australia (AUD)
+  nzx: "NZ", // New Zealand (NZD)
+  hkg: "HK", // Hong Kong (HKD)
+  tyo: "T", tse: "T", // Japan (JPY)
+  sgx: "SI", // Singapore (SGD)
+  nse: "NS", bse: "BO", // India (INR)
+  krx: "KS", kosdaq: "KQ", // South Korea (KRW)
+  twse: "TW", tpex: "TWO", // Taiwan (TWD)
+  // Middle East / Africa
+  tlv: "TA", // Israel (ILS)
+  jse: "JO", // South Africa (ZAR)
+};
+
+// Some listings quote in a fractional subunit (e.g. British pence) rather
+// than the currency's major unit — normalize those to match frankfurter.app.
+const SUBUNIT_CURRENCY = {
+  GBp: "GBP", GBX: "GBP", // UK pence -> pounds
+  ZAc: "ZAR", ZAC: "ZAR", // South African cents -> rand
+  ILA: "ILS", // Israeli agorot -> shekel
+};
 
 // ---------------------------------------------------------------------
 // devalue "unflatten" — see /mnt/skills note in the Python version for
@@ -197,8 +247,8 @@ async function candidatePathsForSymbol(symbol, excludePath) {
 
 async function fetchPrice(exchange, symbol) {
   const suffix = YAHOO_SUFFIX[exchange];
-  if (!suffix) return { price: null, currency: null };
-  const yahooSymbol = `${symbol}.${suffix}`;
+  if (suffix == null) return { price: null, currency: null };
+  const yahooSymbol = suffix ? `${symbol}.${suffix}` : symbol;
   try {
     const r = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${yahooSymbol}`, {
       headers: { "User-Agent": UA, Accept: "application/json" },
@@ -208,9 +258,10 @@ async function fetchPrice(exchange, symbol) {
     const meta = j.chart.result[0].meta;
     let price = meta.regularMarketPrice;
     let currency = meta.currency;
-    if (currency === "GBp" || currency === "GBX") {
+    const majorUnit = SUBUNIT_CURRENCY[currency];
+    if (majorUnit) {
       price = price / 100;
-      currency = "GBP";
+      currency = majorUnit;
     }
     return { price, currency };
   } catch (e) {
