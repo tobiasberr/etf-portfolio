@@ -23,6 +23,7 @@ let cashEur = 0;
 const cache = new Map();     // "exchange/symbol" -> {status:'loading'|'done'|'error', data, error}
 const charts = {};           // canvas id -> Chart.js instance
 let overviewSort = { column: null, dir: "asc" }; // column: one of OVERVIEW_SORT_KEYS below, or null
+let dragSourceIdx = null; // rows[] index currently being dragged, or null
 
 // ---------------------------------------------------------------------
 // State persistence
@@ -162,6 +163,37 @@ function removeRow(idx) {
 }
 
 // ---------------------------------------------------------------------
+// Manual row reordering (drag & drop) — only active while the overview
+// table isn't sorted by a column (overviewSort.column === null), since
+// otherwise the dragged visual position wouldn't match rows[] order.
+// ---------------------------------------------------------------------
+
+function onRowDragStart(event, idx) {
+  dragSourceIdx = idx;
+  event.dataTransfer.effectAllowed = "move";
+  event.dataTransfer.setData("text/plain", String(idx)); // required by some browsers to allow the drag
+}
+
+function onRowDragOver(event) {
+  event.preventDefault(); // required to allow a drop
+  event.dataTransfer.dropEffect = "move";
+}
+
+function onRowDrop(event, targetIdx) {
+  event.preventDefault();
+  if (dragSourceIdx == null || dragSourceIdx === targetIdx) {
+    dragSourceIdx = null;
+    return;
+  }
+  const [moved] = rows.splice(dragSourceIdx, 1);
+  const insertAt = dragSourceIdx < targetIdx ? targetIdx - 1 : targetIdx;
+  rows.splice(insertAt, 0, moved);
+  dragSourceIdx = null;
+  saveState();
+  renderAll();
+}
+
+// ---------------------------------------------------------------------
 // Aggregation
 // ---------------------------------------------------------------------
 
@@ -254,8 +286,9 @@ const OVERVIEW_SORT_COLUMNS = {
 };
 
 function setOverviewSort(column) {
+  // asc -> desc -> off (back to manual/drag order) -> asc -> ...
   if (overviewSort.column === column) {
-    overviewSort.dir = overviewSort.dir === "asc" ? "desc" : "asc";
+    overviewSort = overviewSort.dir === "asc" ? { column, dir: "desc" } : { column: null, dir: "asc" };
   } else {
     overviewSort = { column, dir: "asc" };
   }
@@ -336,10 +369,28 @@ function renderOverviewTable(agg) {
     });
   }
 
+  // Drag-to-reorder only makes sense in the table's natural (unsorted)
+  // order — while a column sort is active, dragging a visually-sorted
+  // row wouldn't map cleanly onto its rows[] position.
+  const draggableRows = !overviewSort.column;
+
   dataRecords.concat(emptyRecords).forEach((r) => {
     const { idx } = r;
-    html += "<tr>";
-    html += r.isEmptyRow ? "<td></td>" : `<td><button class="row-remove" onclick="removeRow(${idx})" title="Remove row">✕</button></td>`;
+    const rowIsDraggable = draggableRows && !r.isEmptyRow;
+    // draggable="true" goes on the grip handle, not the <tr> — that way
+    // dragging only starts from the handle, and normal interaction with
+    // the row's own inputs (selecting text, etc.) isn't hijacked by it.
+    // The row itself just listens for dragover/drop, so it still works
+    // as the drop target regardless of where the drag began.
+    html += rowIsDraggable ? `<tr ondragover="onRowDragOver(event)" ondrop="onRowDrop(event, ${idx})">` : "<tr>";
+    if (r.isEmptyRow) {
+      html += "<td></td>";
+    } else {
+      const handle = rowIsDraggable
+        ? `<span class="drag-handle" draggable="true" ondragstart="onRowDragStart(event, ${idx})" title="Drag to reorder">⠿</span>`
+        : "";
+      html += `<td>${handle}<button class="row-remove" onclick="removeRow(${idx})" title="Remove row">✕</button></td>`;
+    }
     html += `<td>${r.fullNameCell}</td>`;
     html += `<td><input type="text" value="${escapeHtml(r.symbolValue)}" placeholder="lon/EXUS" oninput="onSymbolInput(${idx}, this.value)" onchange="commitRow(${idx})" onkeydown="commitOnEnter(event, () => commitRow(${idx}))"></td>`;
     html += `<td class="num"><input class="shares" type="number" value="${r.shares}" placeholder="shares" oninput="onSharesInput(${idx}, this.value)" onchange="commitRow(${idx})" onkeydown="commitOnEnter(event, () => commitRow(${idx}))"></td>`;
@@ -486,13 +537,12 @@ function renderOverviewChart(agg) {
   if (cashEur) items.push(["Cash", cashEur]);
   const total = agg.totalWithCash;
   const weightLabel = (label, value) => `${label}: ${total ? ((value / total) * 100).toFixed(2) : "0.00"}%`;
-  // No chart title — kept redundant with the "Aggregate — Portfolio
-  // Overview" h2 above it. Legend and hover tooltip both show weight %
-  // instead of the raw EUR value the slices are actually sized by.
-  // Legend on the right (not bottom) — extra height gives its ~11 items
-  // room as a vertical list instead of wrapped columns.
+  // No chart title. Legend and hover tooltip both show weight % instead
+  // of the raw EUR value the slices are actually sized by. Legend on the
+  // right (not bottom); full container width, with extra height to give
+  // its ~11 items room as a vertical list instead of wrapped columns.
   renderPieChart("chart-overview", "chartOverviewCanvas", "", items, {
-    legendPosition: "right", widthPx: 760, heightPx: 460,
+    legendPosition: "right", widthPx: "100%", heightPx: 480,
     legendLabelFn: weightLabel,
     tooltipLabelFn: weightLabel,
   });

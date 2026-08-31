@@ -23,6 +23,8 @@
   table.tbl input.shares{text-align:right}
   .row-remove{cursor:pointer;color:#c0392b;font-weight:bold;border:none;background:none;font-size:1rem}
   .row-remove:hover{color:#e74c3c}
+  .drag-handle{cursor:grab;color:#999;margin-right:.35rem;font-size:1rem}
+  table.tbl tr[draggable="true"]:hover{background:#f7f9fc}
   .cols{display:flex;gap:2rem;flex-wrap:wrap}
   .cols > div{flex:1;min-width:320px}
   .muted{color:#777;font-size:.85rem}
@@ -37,7 +39,7 @@
 <body>
 
 <h1>ETF Portfolio Report</h1>
-<p class="muted">Edit Symbol / Shares below and press Enter — the rest updates automatically.</p>
+<p class="muted">Edit Symbol / Shares below (negative Values for short positions) and press Enter</p>
 <p class="hint">Symbol format: <code>exchange/TICKER</code>, e.g. <code>lon/EXUS</code>, <code>etr/SXR8</code>, <code>bit/FLXE</code>, <code>fra/ICGA</code>. A new empty row appears once you fill the last one.</p>
 
 <div id="chart-overview"></div>
