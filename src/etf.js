@@ -298,7 +298,9 @@ async function candidatePathsForSymbol(symbol, excludePath) {
 // stockanalysis.com integration was iterated on earlier.
 async function fetchCountryFromJustETF(fullName, notes) {
   try {
-    const searchUrl = `https://www.justetf.com/en/find-etf.html?query=${encodeURIComponent(fullName)}`;
+    // Confirmed real URL (from a live Network-tab check): a page
+    // navigation, not an XHR/JSON endpoint.
+    const searchUrl = `https://www.justetf.com/en/search.html?query=${encodeURIComponent(fullName)}&search=ALL`;
     const r = await fetch(searchUrl, { headers: { "User-Agent": UA, Accept: "text/html" } });
     if (!r.ok) {
       notes.push(`[debug] justETF search failed for "${fullName}": HTTP ${r.status}`);
