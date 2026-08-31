@@ -209,6 +209,21 @@ function numOrNull(v) {
   return typeof v === "number" && !Number.isNaN(v) ? v : null;
 }
 
+// Like numOrNull, but also accepts a plain numeric string (e.g. "25.68")
+// — needed for the overview page's stats, which (unlike the holdings
+// page's infoBox/infoTable) come through already formatted as display
+// strings rather than raw numbers. NOT safe for a string carrying a
+// unit/suffix (e.g. "28.52M") — parseFloat would silently drop the
+// suffix and return 28.52 instead; use that string as-is instead.
+function numOrNullLoose(v) {
+  if (typeof v === "number") return Number.isNaN(v) ? null : v;
+  if (typeof v !== "string") return null;
+  const cleaned = v.replace(/[,%]/g, "").trim();
+  if (!cleaned || cleaned.toLowerCase() === "n/a") return null;
+  const n = parseFloat(cleaned);
+  return Number.isFinite(n) ? n : null;
+}
+
 function formatLargeNumber(n) {
   n = Number(n);
   const sign = n < 0 ? "-" : "";
@@ -233,6 +248,15 @@ function pct(v) {
   return Number(v);
 }
 
+function decodeHtmlEntities(s) {
+  return s
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'");
+}
+
 // Returns { name, debug } — debug is a human-readable reason whenever
 // name is null, so a failure here is diagnosable from the UI instead of
 // silently falling back to the bare ticker.
@@ -243,9 +267,19 @@ async function fetchTitleName(path) {
     const html = await r.text();
     const m = html.match(/<title>([^<]*)<\/title>/i);
     if (!m) return { name: null, debug: "no <title> tag found" };
-    const title = m[1].trim();
-    if (!title.includes(" - ")) return { name: null, debug: `title had no " - " separator: "${title}"` };
-    return { name: title.split(" - ").slice(1).join(" - ").trim(), debug: null };
+    const title = decodeHtmlEntities(m[1].trim());
+
+    // Current format: "<Name> (<EXCH>:<TICKER>) Stock Price & Overview"
+    const withSuffix = title.match(/^(.*?)\s*\([^)]+\)\s*Stock Price/i);
+    if (withSuffix && withSuffix[1].trim()) return { name: withSuffix[1].trim(), debug: null };
+
+    // Older format seen previously: "<something> - <Name>"
+    if (title.includes(" - ")) {
+      const name = title.split(" - ").slice(1).join(" - ").trim();
+      if (name) return { name, debug: null };
+    }
+
+    return { name: null, debug: `title matched no known pattern: "${title}"` };
   } catch (e) {
     return { name: null, debug: `fetch threw: ${e.message}` };
   }
@@ -354,11 +388,19 @@ export async function loadEtf(exchange, symbol) {
     }
   }
 
-  const sourceUrl = `https://stockanalysis.com${holdingsPageMissing ? overviewPath : holdingsPath}`;
+  // Broader than the literal-404 flag above: stockanalysis.com's
+  // __data.json endpoint can also return 200 with a payload that just
+  // has no holdings/sectors — a "soft" not-found (confirmed on
+  // fra/XDG7, where the JSON is 200 but the rendered HTML page 404s).
+  // Either way, `data` staying null means there's nothing usable on the
+  // holdings page, so treat both the same for the rest of this function.
+  const noHoldingsData = holdingsPageMissing || !data;
+
+  const sourceUrl = `https://stockanalysis.com${noHoldingsData ? overviewPath : holdingsPath}`;
 
   let fullName = null;
   const fullNameDebug = [];
-  if (!holdingsPageMissing) {
+  if (!noHoldingsData) {
     const r1 = await fetchTitleName(holdingsPath);
     fullName = r1.name;
     if (r1.debug) fullNameDebug.push(`holdings page: ${r1.debug}`);
@@ -370,8 +412,7 @@ export async function loadEtf(exchange, symbol) {
   }
   if (!fullName) {
     fullName = `${exchange.toUpperCase()}:${symbol}`;
-    // TEMPORARY DIAGNOSTIC — remove once confirmed against real data.
-    if (fullNameDebug.length) notes.push(`[debug] full name lookup failed — ${fullNameDebug.join("; ")}`);
+    if (fullNameDebug.length) notes.push(`full name lookup failed — ${fullNameDebug.join("; ")}`);
   }
 
   if (data) {
@@ -409,7 +450,7 @@ export async function loadEtf(exchange, symbol) {
   // Skip all of this — including the cross-listing search fallback below,
   // which wouldn't find anything relevant either — when there's simply no
   // holdings page for this listing (already noted above).
-  if (!holdingsPageMissing) {
+  if (!noHoldingsData) {
     if (!holdings.length) {
       notes.push("no holdings data available");
     }
@@ -475,26 +516,25 @@ export async function loadEtf(exchange, symbol) {
       notes.push("expense ratio not found on overview page");
     }
 
-    if (assets === "n/a") {
-      const aum = numOrNull(ovStats.aum);
-      if (aum != null) assets = formatLargeNumber(aum);
+    // Unlike the holdings page's infoBox/infoTable (raw numbers), the
+    // overview page's stats come through already formatted for display
+    // (e.g. aum: "28.52M", peRatio: "25.68") — use aum as-is rather than
+    // re-running it through formatLargeNumber (which expects a raw
+    // number and would mangle the "M"/"B" suffix already applied), and
+    // parse the rest with numOrNullLoose since they're numeric strings.
+    if (assets === "n/a" && ovStats.aum != null && ovStats.aum !== "n/a") {
+      assets = String(ovStats.aum);
     }
     if (peRatio === "n/a") {
-      const pe = numOrNull(ovStats.peRatio);
+      const pe = numOrNullLoose(ovStats.peRatio);
       if (pe != null) peRatio = pe.toFixed(2);
     }
     if (top10Pct === "n/a") {
-      const top10Val = numOrNull(ovStats.top10);
+      const top10Val = numOrNullLoose(ovStats.top10);
       if (top10Val != null) top10Pct = `${top10Val.toFixed(2)}%`;
     }
     if (totalHoldings === "n/a" && ovStats.count != null) {
       totalHoldings = String(ovStats.count);
-    }
-    // TEMPORARY DIAGNOSTIC — remove once field names are confirmed against
-    // real data. Dumps the overview page's actual stat keys/values so we
-    // can see what it's really called instead of guessing again.
-    if (assets === "n/a" || peRatio === "n/a") {
-      notes.push(`[debug] overview page ovStats: ${JSON.stringify(ovStats).slice(0, 1500)}`);
     }
   } catch (e) {
     notes.push(`overview page fetch failed: ${e.message}`);
@@ -505,7 +545,7 @@ export async function loadEtf(exchange, symbol) {
   // ratio). "Currency" is an exact-label lookup too, in case the page
   // exposes one directly; otherwise fall back to the currency the exchange
   // itself trades in.
-  let price = numOrNull(findExactStat(ovStats, "price", "last price", "current price", "close", "last"));
+  let price = numOrNullLoose(findExactStat(ovStats, "price", "last price", "current price", "close", "last"));
   let currency = null;
   let priceError = null;
 
