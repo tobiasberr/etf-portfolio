@@ -287,6 +287,68 @@ async function candidatePathsForSymbol(symbol, excludePath) {
   return paths;
 }
 
+// Fallback country-allocation source for when stockanalysis.com has none
+// (neither the primary listing nor a cross-listing of the same index) —
+// e.g. bit/HEMA. UNVERIFIED against real justETF markup: this sandbox
+// can't reach justetf.com to test against it (same egress restriction as
+// the other external sites), so this is a best-effort implementation
+// built from general knowledge of the site, not confirmed real data.
+// It pushes [debug] notes at each step precisely so a failure is
+// diagnosable and fixable from real data, the same way the
+// stockanalysis.com integration was iterated on earlier.
+async function fetchCountryFromJustETF(fullName, notes) {
+  try {
+    const searchUrl = `https://www.justetf.com/en/find-etf.html?query=${encodeURIComponent(fullName)}`;
+    const r = await fetch(searchUrl, { headers: { "User-Agent": UA, Accept: "text/html" } });
+    if (!r.ok) {
+      notes.push(`[debug] justETF search failed for "${fullName}": HTTP ${r.status}`);
+      return {};
+    }
+    const searchHtml = await r.text();
+    const isinMatch = searchHtml.match(/isin=([A-Z0-9]{12})/i);
+    if (!isinMatch) {
+      notes.push(`[debug] justETF search for "${fullName}" found no ISIN link (response ${searchHtml.length} chars)`);
+      return {};
+    }
+    const isin = isinMatch[1].toUpperCase();
+
+    const profileUrl = `https://www.justetf.com/en/etf-profile.html?isin=${isin}`;
+    const pr = await fetch(profileUrl, { headers: { "User-Agent": UA, Accept: "text/html" } });
+    if (!pr.ok) {
+      notes.push(`[debug] justETF profile fetch failed for ISIN ${isin}: HTTP ${pr.status}`);
+      return {};
+    }
+    const profileHtml = await pr.text();
+    const countries = parseJustETFCountries(profileHtml);
+    if (Object.keys(countries).length) {
+      notes.push(`country weights sourced from justETF (ISIN ${isin}) — stockanalysis.com had none for this listing`);
+      return countries;
+    }
+    notes.push(`[debug] justETF profile for ISIN ${isin} fetched (${profileHtml.length} chars) but no country allocation pattern matched`);
+    return {};
+  } catch (e) {
+    notes.push(`[debug] justETF fetch threw: ${e.message}`);
+    return {};
+  }
+}
+
+// Best-effort HTML scrape for a "Country" allocation table — looks for
+// <td>Name</td>...<td>NN.NN%</td> pairs within (or near) a section that
+// mentions "Country". Unverified; see fetchCountryFromJustETF above.
+function parseJustETFCountries(html) {
+  const countries = {};
+  const sectionMatch = html.match(/Country[\s\S]{0,6000}?<\/table>/i);
+  const scope = sectionMatch ? sectionMatch[0] : html;
+  const rowRe = /<td[^>]*>\s*([A-Za-z][A-Za-z .'()&-]{1,40}?)\s*<\/td>\s*<td[^>]*>\s*([\d.,]+)\s*%/g;
+  let m;
+  while ((m = rowRe.exec(scope)) && Object.keys(countries).length < 40) {
+    const name = m[1].trim();
+    const value = parseFloat(m[2].replace(",", "."));
+    if (name && Number.isFinite(value)) countries[name] = value;
+  }
+  return countries;
+}
+
 async function fetchPrice(exchange, symbol) {
   const suffix = YAHOO_SUFFIX[exchange];
   if (suffix == null) {
@@ -464,6 +526,14 @@ export async function loadEtf(exchange, symbol) {
           notes.push(`cross-listing fetch failed (${altPath}): ${e.message}`);
         }
       }
+      // stockanalysis.com (primary + cross-listing) has nothing for
+      // country specifically on some listings (e.g. bit/HEMA) — try
+      // justETF as a last resort before giving up on it.
+      if (!Object.keys(countries).length) {
+        const justEtfCountries = await fetchCountryFromJustETF(fullName, notes);
+        if (Object.keys(justEtfCountries).length) countries = justEtfCountries;
+      }
+
       const stillMissing = [];
       if (!Object.keys(sectors).length) stillMissing.push("sector");
       if (!Object.keys(countries).length) stillMissing.push("country");
