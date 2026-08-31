@@ -322,7 +322,7 @@ function renderHoldingsTable(agg) {
 function renderPieChart(containerId, canvasId, title, items, opts) {
   opts = opts || {};
   const legendPosition = opts.legendPosition || "right";
-  const widthPx = opts.widthPx || 480;
+  const widthPx = opts.widthPx || 480; // a number (px) or a CSS width string like "100%"
   const heightPx = opts.heightPx || 320;
   const legendLabelFn = opts.legendLabelFn || null; // (label, value, extra) => legend text
 
@@ -341,7 +341,8 @@ function renderPieChart(containerId, canvasId, title, items, opts) {
     container.innerHTML = "";
     return;
   }
-  container.innerHTML = `<div class="chart-wrap" style="max-width:${widthPx}px"><canvas id="${canvasId}" height="${heightPx}"></canvas></div>`;
+  const maxWidth = typeof widthPx === "number" ? `${widthPx}px` : widthPx;
+  container.innerHTML = `<div class="chart-wrap" style="max-width:${maxWidth}"><canvas id="${canvasId}" height="${heightPx}"></canvas></div>`;
 
   if (charts[canvasId]) charts[canvasId].destroy();
   const ctx = document.getElementById(canvasId);
@@ -377,18 +378,23 @@ function renderPieChart(containerId, canvasId, title, items, opts) {
 function renderOverviewChart(agg) {
   const items = agg.rowInfos.filter((ri) => ri.valueEur).map((ri) => [ri.data.fullName, ri.valueEur]);
   if (cashEur) items.push(["Cash", cashEur]);
-  renderPieChart("chart-overview", "chartOverviewCanvas", "Portfolio Allocation by Value (EUR)", items,
-    { legendPosition: "bottom", widthPx: 760, heightPx: 420 });
+  const total = agg.totalWithCash;
+  renderPieChart("chart-overview", "chartOverviewCanvas", "Portfolio Allocation by Value (EUR)", items, {
+    legendPosition: "bottom", widthPx: 760, heightPx: 420,
+    legendLabelFn: (label, value) => `${label}: ${total ? ((value / total) * 100).toFixed(2) : "0.00"}%`,
+  });
 }
 
 function renderSectorChart(agg) {
   renderPieChart("chart-sector", "chartSectorCanvas", "Sector Weights", agg.sectorList, {
+    widthPx: 640, heightPx: 400,
     legendLabelFn: (label, value) => `${label}: ${value.toFixed(2)}%`,
   });
 }
 
 function renderCountryChart(agg) {
   renderPieChart("chart-country", "chartCountryCanvas", "Country Weights", agg.countryList, {
+    widthPx: 640, heightPx: 400,
     legendLabelFn: (label, value) => `${label}: ${value.toFixed(2)}%`,
   });
 }
@@ -402,6 +408,7 @@ function renderHoldingsChart(agg) {
   const items = agg.holdingsList.map((h) => [h.symbol || h.name, h.weightPct, h.symbol ? h.name : null]);
   if (gap > 0.01) items.push(["Not in published Top 25 (per ETF)", gap, null]);
   renderPieChart("chart-holdings", "chartHoldingsCanvas", "Top Holdings", items, {
+    widthPx: "100%", heightPx: 480,
     legendLabelFn: (label, weight, name) =>
       name ? `${label} · ${name} · ${weight.toFixed(2)}%` : `${label}: ${weight.toFixed(2)}%`,
   });
