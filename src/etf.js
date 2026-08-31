@@ -384,6 +384,14 @@ export async function loadEtf(exchange, symbol) {
   }
 
   if (data) {
+    // TEMPORARY DIAGNOSTIC — remove once confirmed against real data.
+    // Cash-line holdings (e.g. "Capital Cash Ctrl") are reportedly
+    // missing from the app entirely, not just mis-deduped — dump the
+    // raw (pre-mapping) holdings array so we can see whether they're
+    // even present in what stockanalysis.com actually sends back, and
+    // in what shape, instead of guessing a third time.
+    notes.push(`[debug] raw data.holdings: count=${(data.holdings || []).length}, first 12=${JSON.stringify((data.holdings || []).slice(0, 12))}`.slice(0, 1800));
+
     for (const h of (data.holdings || []).slice(0, 25)) {
       // Cash/other lines (e.g. "Capital Cash Ctrl", "Usd Capital Cash")
       // come through with a placeholder like "n/a" for the symbol —
