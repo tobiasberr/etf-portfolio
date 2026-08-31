@@ -332,19 +332,32 @@ async function fetchCountryFromJustETF(fullName, notes) {
   }
 }
 
-// Best-effort HTML scrape for a "Country" allocation table — looks for
-// <td>Name</td>...<td>NN.NN%</td> pairs within (or near) a section that
-// mentions "Country". Unverified; see fetchCountryFromJustETF above.
+// Best-effort HTML scrape for a "Country" allocation list. Tries a couple
+// of plausible markup shapes since the real one isn't confirmed: a
+// <table> with <td>Name</td>...<td>NN.NN%</td> rows, and a generic
+// tag-agnostic "some tag containing a country-ish name, then within a
+// short distance another tag containing NN.NN%" pattern for a div/span
+// based layout instead of a real <table>. Unverified; see
+// fetchCountryFromJustETF above — this is a starting point to refine
+// once real markup is available, not a confirmed-working scrape.
 function parseJustETFCountries(html) {
+  let countries = extractNamePercentPairs(html, /<td[^>]*>\s*([A-Za-z][A-Za-z .'()&-]{1,40}?)\s*<\/td>\s*<td[^>]*>\s*([\d.,]+)\s*%/g);
+  if (!Object.keys(countries).length) {
+    // Fallback: no real <table>, e.g. a div/span-based layout — look for
+    // "...>Name<...NN.NN %..." within a short distance of each other,
+    // regardless of the specific tag.
+    countries = extractNamePercentPairs(html, />\s*([A-Za-z][A-Za-z .'()&-]{1,40}?)\s*<[^>]{0,80}?>\s*([\d.,]+)\s*%/g);
+  }
+  return countries;
+}
+
+function extractNamePercentPairs(html, rowRe) {
   const countries = {};
-  const sectionMatch = html.match(/Country[\s\S]{0,6000}?<\/table>/i);
-  const scope = sectionMatch ? sectionMatch[0] : html;
-  const rowRe = /<td[^>]*>\s*([A-Za-z][A-Za-z .'()&-]{1,40}?)\s*<\/td>\s*<td[^>]*>\s*([\d.,]+)\s*%/g;
   let m;
-  while ((m = rowRe.exec(scope)) && Object.keys(countries).length < 40) {
+  while ((m = rowRe.exec(html)) && Object.keys(countries).length < 60) {
     const name = m[1].trim();
     const value = parseFloat(m[2].replace(",", "."));
-    if (name && Number.isFinite(value)) countries[name] = value;
+    if (name && Number.isFinite(value) && value > 0 && value <= 100) countries[name] = value;
   }
   return countries;
 }
