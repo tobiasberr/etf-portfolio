@@ -58,6 +58,27 @@ const YAHOO_SUFFIX = {
   jse: "JO", // South Africa (ZAR)
 };
 
+// Currency each exchange trades in — used to interpret a price pulled from
+// stockanalysis.com's own page (see the price fallback in loadEtf below),
+// since that page shows a bare number with no machine-readable currency code.
+const EXCHANGE_CURRENCY = {
+  nyse: "USD", nasdaq: "USD", amex: "USD", nyseamerican: "USD", otc: "USD",
+  tsx: "CAD", tsxv: "CAD", cse: "CAD", neo: "CAD",
+  bvmf: "BRL", bcba: "ARS", bmv: "MXN",
+  lon: "GBP", ise: "EUR",
+  etr: "EUR", fra: "EUR", ber: "EUR", stu: "EUR", mun: "EUR", dus: "EUR",
+  bit: "EUR", par: "EUR", ams: "EUR", bru: "EUR", lis: "EUR", mce: "EUR", bme: "EUR",
+  vie: "EUR", hel: "EUR",
+  swx: "CHF", vtx: "CHF",
+  sto: "SEK", cph: "DKK", osl: "NOK", wse: "PLN",
+  asx: "AUD", nzx: "NZD",
+  hkg: "HKD", tyo: "JPY", tse: "JPY", sgx: "SGD",
+  nse: "INR", bse: "INR",
+  krx: "KRW", kosdaq: "KRW",
+  twse: "TWD", tpex: "TWD",
+  tlv: "ILS", jse: "ZAR",
+};
+
 // Some listings quote in a fractional subunit (e.g. British pence) rather
 // than the currency's major unit — normalize those to match frankfurter.app.
 const SUBUNIT_CURRENCY = {
@@ -165,6 +186,17 @@ function findStat(stats, ...keywords) {
   for (const [k, v] of Object.entries(stats)) {
     const kl = k.toLowerCase();
     if (keywords.some((kw) => kl.includes(kw))) return v;
+  }
+  return null;
+}
+
+// Exact (not substring) label match — needed for "Price" specifically,
+// since a substring match against "price" would just as happily return
+// "Price / Book", "Price / Sales", "Price Target", etc.
+function findExactStat(stats, ...labels) {
+  const wanted = new Set(labels.map((l) => l.toLowerCase()));
+  for (const [k, v] of Object.entries(stats)) {
+    if (wanted.has(k.toLowerCase())) return v;
   }
   return null;
 }
@@ -389,10 +421,12 @@ export async function loadEtf(exchange, symbol) {
   }
 
   // Expense ratio: overview page only (confirmed not present on /holdings/).
+  // Also grab whatever price-like stat is on this page, as a fallback for
+  // when Yahoo Finance (queried below) has no data for this listing.
+  let ovStats = {};
   try {
     const overviewPath = `/quote/${exchange}/${symbol}/`;
     const ovNodes = await fetchPageNodes(overviewPath);
-    let ovStats = {};
     for (const obj of ovNodes) {
       if (obj && typeof obj === "object") {
         ovStats = { ...ovStats, ...flattenStats(obj) };
@@ -411,7 +445,23 @@ export async function loadEtf(exchange, symbol) {
     notes.push(`overview page fetch failed: ${e.message}`);
   }
 
-  const { price, currency, error: priceError } = await fetchPrice(exchange, symbol);
+  let { price, currency, error: priceError } = await fetchPrice(exchange, symbol);
+
+  // Fallback: Yahoo Finance doesn't cover every listing (e.g. some ASX
+  // CDIs of US-domiciled funds) — if it came back empty, try the price
+  // stat already sitting in stockanalysis.com's own overview-page data,
+  // paired with the currency the exchange itself trades in.
+  if (price == null) {
+    const fallbackPrice = numOrNull(findExactStat(ovStats, "price", "last price", "current price", "close", "last"));
+    const fallbackCurrency = EXCHANGE_CURRENCY[exchange];
+    if (fallbackPrice != null && fallbackCurrency) {
+      price = fallbackPrice;
+      currency = fallbackCurrency;
+      notes.push(`price sourced from stockanalysis.com (Yahoo Finance had no data for this listing: ${priceError})`);
+      priceError = null;
+    }
+  }
+
   let priceEur = null;
   if (price != null && currency) {
     try {
