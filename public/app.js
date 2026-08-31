@@ -99,9 +99,12 @@ async function ensureData(exchange, symbol) {
 
 // oninput just updates the in-memory model as the user types — it does
 // NOT re-render, so the field the user is actively editing is never
-// touched mid-keystroke. The matching onchange (fires on blur, or on
-// Enter via commitOnEnter below) applies the edit: saves state, kicks
-// off any data fetch, and re-renders everything.
+// touched mid-keystroke. The matching onchange applies the edit on blur
+// (saves state, kicks off any data fetch, re-renders everything);
+// commitOnEnter makes Enter do the same immediately, rather than
+// relying on Enter to trigger a blur that then triggers onchange —
+// that indirection isn't reliably fired by every browser for every
+// input type, e.g. type="number" fields.
 
 function onSymbolInput(idx, value) {
   rows[idx].rawSymbolInput = value;
@@ -125,8 +128,10 @@ function onCashInput(value) {
   cashEur = Number.isFinite(num) ? num : 0;
 }
 
-function commitOnEnter(event) {
-  if (event.key === "Enter") event.target.blur(); // triggers the field's onchange
+function commitOnEnter(event, commitFn) {
+  if (event.key !== "Enter") return;
+  commitFn();
+  event.target.blur();
 }
 
 function commitRow(idx) {
@@ -249,8 +254,8 @@ function renderOverviewTable(agg) {
     html += "<tr>";
     html += isEmptyRow ? "<td></td>" : `<td><button class="row-remove" onclick="removeRow(${idx})" title="Remove row">✕</button></td>`;
     html += `<td>${fullNameCell}</td>`;
-    html += `<td><input type="text" value="${escapeHtml(symbolValue)}" placeholder="lon/EXUS" oninput="onSymbolInput(${idx}, this.value)" onchange="commitRow(${idx})" onkeydown="commitOnEnter(event)"></td>`;
-    html += `<td class="num"><input class="shares" type="number" value="${shares}" placeholder="shares" oninput="onSharesInput(${idx}, this.value)" onchange="commitRow(${idx})" onkeydown="commitOnEnter(event)"></td>`;
+    html += `<td><input type="text" value="${escapeHtml(symbolValue)}" placeholder="lon/EXUS" oninput="onSymbolInput(${idx}, this.value)" onchange="commitRow(${idx})" onkeydown="commitOnEnter(event, () => commitRow(${idx}))"></td>`;
+    html += `<td class="num"><input class="shares" type="number" value="${shares}" placeholder="shares" oninput="onSharesInput(${idx}, this.value)" onchange="commitRow(${idx})" onkeydown="commitOnEnter(event, () => commitRow(${idx}))"></td>`;
     html += `<td class="num">${priceStr}</td>`;
     html += `<td class="num">${valueEur != null ? fmtEur(valueEur) : ""}</td>`;
     html += `<td class="num">${expRatio}</td>`;
@@ -264,7 +269,7 @@ function renderOverviewTable(agg) {
   // Cash row
   html += "<tr>";
   html += "<td></td><td>Cash</td><td></td><td></td><td></td>";
-  html += `<td class="num"><input class="shares" type="number" value="${cashEur}" oninput="onCashInput(this.value)" onchange="commitCash()" onkeydown="commitOnEnter(event)"></td>`;
+  html += `<td class="num"><input class="shares" type="number" value="${cashEur}" oninput="onCashInput(this.value)" onchange="commitCash()" onkeydown="commitOnEnter(event, commitCash)"></td>`;
   html += "<td></td><td></td><td></td><td></td><td></td>";
   html += "</tr>";
 
