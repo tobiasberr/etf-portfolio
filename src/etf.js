@@ -140,7 +140,11 @@ function unflattenDevalue(arr) {
 async function fetchPageNodes(path) {
   const url = `https://stockanalysis.com${path}__data.json?x-sveltekit-trailing-slash=1`;
   const r = await fetch(url, { headers: { "User-Agent": UA, Accept: "*/*" } });
-  if (!r.ok) throw new Error(`fetch ${path}__data.json failed: HTTP ${r.status}`);
+  if (!r.ok) {
+    const err = new Error(`fetch ${path}__data.json failed: HTTP ${r.status}`);
+    err.status = r.status;
+    throw err;
+  }
   const payload = await r.json();
   const nodes = [];
   for (const node of payload.nodes || []) {
@@ -229,11 +233,9 @@ function pct(v) {
   return Number(v);
 }
 
-async function fetchFullNameFromTitle(exchange, symbol) {
+async function fetchTitleName(path) {
   try {
-    const r = await fetch(`https://stockanalysis.com/quote/${exchange}/${symbol}/holdings/`, {
-      headers: { "User-Agent": UA },
-    });
+    const r = await fetch(`https://stockanalysis.com${path}`, { headers: { "User-Agent": UA } });
     if (!r.ok) return null;
     const html = await r.text();
     const m = html.match(/<title>([^<]*)<\/title>/i);
@@ -324,7 +326,7 @@ async function fxRateToEur(currency) {
 export async function loadEtf(exchange, symbol) {
   const notes = [];
   const holdingsPath = `/quote/${exchange}/${symbol}/holdings/`;
-  const sourceUrl = `https://stockanalysis.com${holdingsPath}`;
+  const overviewPath = `/quote/${exchange}/${symbol}/`;
 
   let data = null;
   let holdings = [];
@@ -335,16 +337,25 @@ export async function loadEtf(exchange, symbol) {
   let assets = "n/a";
   let peRatio = "n/a";
   let expenseRatio = "n/a";
+  let holdingsPageMissing = false;
 
   try {
     const nodes = await fetchPageNodes(holdingsPath);
     data = findHoldingsData(nodes);
     if (!data) notes.push("holdings page data payload did not contain holdings/sectors — ticker may not exist on stockanalysis.com");
   } catch (e) {
-    notes.push(`internal data-JSON fetch failed: ${e.message}`);
+    if (e.status === 404) {
+      holdingsPageMissing = true;
+      notes.push("no holdings page for this listing on stockanalysis.com — showing overview data only (no holdings/sector/country breakdown)");
+    } else {
+      notes.push(`internal data-JSON fetch failed: ${e.message}`);
+    }
   }
 
-  let fullName = await fetchFullNameFromTitle(exchange, symbol);
+  const sourceUrl = `https://stockanalysis.com${holdingsPageMissing ? overviewPath : holdingsPath}`;
+
+  let fullName = holdingsPageMissing ? null : await fetchTitleName(holdingsPath);
+  if (!fullName) fullName = await fetchTitleName(overviewPath);
   if (!fullName) fullName = `${exchange.toUpperCase()}:${symbol}`;
 
   if (data) {
@@ -379,53 +390,59 @@ export async function loadEtf(exchange, symbol) {
     }
   }
 
-  if (!holdings.length) {
-    notes.push("no holdings data available");
-  }
-
-  if (!Object.keys(sectors).length || !Object.keys(countries).length) {
-    const missing = [];
-    if (!Object.keys(sectors).length) missing.push("sector");
-    if (!Object.keys(countries).length) missing.push("country");
-    notes.push(`${missing.join("/")} breakdown unavailable from primary listing`);
-
-    const altPaths = await candidatePathsForSymbol(symbol, holdingsPath);
-    for (const altPath of altPaths) {
-      if (Object.keys(sectors).length && Object.keys(countries).length) break;
-      try {
-        const altNodes = await fetchPageNodes(altPath);
-        const altData = findHoldingsData(altNodes);
-        if (!altData) continue;
-        if (!Object.keys(sectors).length) {
-          const altSectors = Object.fromEntries((altData.sectors || []).filter((s) => s.n).map((s) => [s.n, pct(s.w)]));
-          if (Object.keys(altSectors).length) {
-            sectors = altSectors;
-            notes.push(`sector weights backfilled from ${altPath} (different listing of the same index)`);
-          }
-        }
-        if (!Object.keys(countries).length) {
-          const altCountries = Object.fromEntries((altData.countries || []).filter((c) => c.country).map((c) => [c.country, pct(c.weight)]));
-          if (Object.keys(altCountries).length) {
-            countries = altCountries;
-            notes.push(`country weights backfilled from ${altPath} (different listing of the same index)`);
-          }
-        }
-      } catch (e) {
-        notes.push(`cross-listing fetch failed (${altPath}): ${e.message}`);
-      }
+  // Skip all of this — including the cross-listing search fallback below,
+  // which wouldn't find anything relevant either — when there's simply no
+  // holdings page for this listing (already noted above).
+  if (!holdingsPageMissing) {
+    if (!holdings.length) {
+      notes.push("no holdings data available");
     }
-    const stillMissing = [];
-    if (!Object.keys(sectors).length) stillMissing.push("sector");
-    if (!Object.keys(countries).length) stillMissing.push("country");
-    if (stillMissing.length) notes.push(`${stillMissing.join("/")} weights still unavailable`);
+
+    if (!Object.keys(sectors).length || !Object.keys(countries).length) {
+      const missing = [];
+      if (!Object.keys(sectors).length) missing.push("sector");
+      if (!Object.keys(countries).length) missing.push("country");
+      notes.push(`${missing.join("/")} breakdown unavailable from primary listing`);
+
+      const altPaths = await candidatePathsForSymbol(symbol, holdingsPath);
+      for (const altPath of altPaths) {
+        if (Object.keys(sectors).length && Object.keys(countries).length) break;
+        try {
+          const altNodes = await fetchPageNodes(altPath);
+          const altData = findHoldingsData(altNodes);
+          if (!altData) continue;
+          if (!Object.keys(sectors).length) {
+            const altSectors = Object.fromEntries((altData.sectors || []).filter((s) => s.n).map((s) => [s.n, pct(s.w)]));
+            if (Object.keys(altSectors).length) {
+              sectors = altSectors;
+              notes.push(`sector weights backfilled from ${altPath} (different listing of the same index)`);
+            }
+          }
+          if (!Object.keys(countries).length) {
+            const altCountries = Object.fromEntries((altData.countries || []).filter((c) => c.country).map((c) => [c.country, pct(c.weight)]));
+            if (Object.keys(altCountries).length) {
+              countries = altCountries;
+              notes.push(`country weights backfilled from ${altPath} (different listing of the same index)`);
+            }
+          }
+        } catch (e) {
+          notes.push(`cross-listing fetch failed (${altPath}): ${e.message}`);
+        }
+      }
+      const stillMissing = [];
+      if (!Object.keys(sectors).length) stillMissing.push("sector");
+      if (!Object.keys(countries).length) stillMissing.push("country");
+      if (stillMissing.length) notes.push(`${stillMissing.join("/")} weights still unavailable`);
+    }
   }
 
   // Expense ratio: overview page only (confirmed not present on /holdings/).
-  // Also grab whatever price-like stat is on this page — it's the primary
-  // price source below, ahead of the Yahoo Finance fallback.
+  // Also grab whatever price/AUM/P-E/top10 stats are on this page — the
+  // primary price source below (ahead of the Yahoo Finance fallback), and
+  // a fallback for assets/peRatio/top10Pct/totalHoldings whenever the
+  // holdings page didn't have them (including when it's missing entirely).
   let ovStats = {};
   try {
-    const overviewPath = `/quote/${exchange}/${symbol}/`;
     const ovNodes = await fetchPageNodes(overviewPath);
     for (const obj of ovNodes) {
       if (obj && typeof obj === "object") {
@@ -440,6 +457,22 @@ export async function loadEtf(exchange, symbol) {
       expenseRatio = typeof exp === "number" ? `${exp}%` : String(exp);
     } else {
       notes.push("expense ratio not found on overview page");
+    }
+
+    if (assets === "n/a") {
+      const aum = numOrNull(ovStats.aum);
+      if (aum != null) assets = formatLargeNumber(aum);
+    }
+    if (peRatio === "n/a") {
+      const pe = numOrNull(ovStats.peRatio);
+      if (pe != null) peRatio = pe.toFixed(2);
+    }
+    if (top10Pct === "n/a") {
+      const top10Val = numOrNull(ovStats.top10);
+      if (top10Val != null) top10Pct = `${top10Val.toFixed(2)}%`;
+    }
+    if (totalHoldings === "n/a" && ovStats.count != null) {
+      totalHoldings = String(ovStats.count);
     }
   } catch (e) {
     notes.push(`overview page fetch failed: ${e.message}`);
