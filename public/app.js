@@ -221,7 +221,7 @@ function fmtEur(n) {
 
 function renderOverviewTable(agg) {
   const headers = ["", "Full Name", "Symbol", "Shares", "Price/Share", "Value (EUR)",
-    "Expense Ratio", "Total Holdings", "Top 10 %", "Assets", "P/E Ratio"];
+    "Expense Ratio", "Total Holdings", "Top 10 Holdings Percentage", "Assets", "P/E Ratio"];
   const rightCols = new Set([3, 4, 5, 6, 7, 8, 9, 10]);
 
   let html = '<table class="tbl"><thead><tr>';
@@ -318,13 +318,16 @@ function renderPieChart(containerId, canvasId, title, items, opts) {
   const legendPosition = opts.legendPosition || "right";
   const widthPx = opts.widthPx || 480;
   const heightPx = opts.heightPx || 320;
+  const legendLabelFn = opts.legendLabelFn || null; // (label, value, extra) => legend text
 
-  let list = items.filter(([, v]) => v).map(([k, v]) => [String(k), Number(v)]);
+  // items may be [label, value] or [label, value, extra] (extra is passed
+  // through to legendLabelFn, e.g. a holding's full name alongside its symbol).
+  let list = items.filter(([, v]) => v).map(([k, v, extra]) => [String(k), Number(v), extra]);
   list.sort((a, b) => b[1] - a[1]);
   if (list.length > PIE_MAX_SLICES) {
     const head = list.slice(0, PIE_MAX_SLICES);
     const other = list.slice(PIE_MAX_SLICES).reduce((s, [, v]) => s + v, 0);
-    list = head.concat([["Other", other]]);
+    list = head.concat([["Other", other, null]]);
   }
 
   const container = document.getElementById(containerId);
@@ -336,6 +339,20 @@ function renderPieChart(containerId, canvasId, title, items, opts) {
 
   if (charts[canvasId]) charts[canvasId].destroy();
   const ctx = document.getElementById(canvasId);
+
+  const legendLabels = { boxWidth: 14, font: { size: 11 } };
+  if (legendLabelFn) {
+    legendLabels.generateLabels = (chart) => {
+      // Extend Chart.js's own generateLabels so color swatches etc. stay correct.
+      const base = Chart.overrides.pie.plugins.legend.labels.generateLabels(chart);
+      base.forEach((item) => {
+        const entry = list[item.index];
+        if (entry) item.text = legendLabelFn(entry[0], entry[1], entry[2]);
+      });
+      return base;
+    };
+  }
+
   charts[canvasId] = new Chart(ctx, {
     type: "pie",
     data: {
@@ -345,7 +362,7 @@ function renderPieChart(containerId, canvasId, title, items, opts) {
     options: {
       plugins: {
         title: { display: true, text: title },
-        legend: { position: legendPosition, labels: { boxWidth: 14, font: { size: 11 } } },
+        legend: { position: legendPosition, labels: legendLabels },
       },
     },
   });
@@ -359,19 +376,26 @@ function renderOverviewChart(agg) {
 }
 
 function renderSectorChart(agg) {
-  renderPieChart("chart-sector", "chartSectorCanvas", "Sector Weights", agg.sectorList);
+  renderPieChart("chart-sector", "chartSectorCanvas", "Sector Weights", agg.sectorList, {
+    legendLabelFn: (label, value) => `${label}: ${value.toFixed(2)}%`,
+  });
 }
 
 function renderCountryChart(agg) {
-  renderPieChart("chart-country", "chartCountryCanvas", "Country Weights", agg.countryList);
+  renderPieChart("chart-country", "chartCountryCanvas", "Country Weights", agg.countryList, {
+    legendLabelFn: (label, value) => `${label}: ${value.toFixed(2)}%`,
+  });
 }
 
 function renderHoldingsChart(agg) {
   const knownPct = agg.holdingsList.reduce((s, h) => s + h.weightPct, 0);
   const gap = Math.max(0, 100 - knownPct);
-  const items = agg.holdingsList.map((h) => [h.symbol, h.weightPct]);
-  if (gap > 0.01) items.push(["Not in published Top 25 (per ETF)", gap]);
-  renderPieChart("chart-holdings", "chartHoldingsCanvas", "Top Holdings", items);
+  const items = agg.holdingsList.map((h) => [h.symbol, h.weightPct, h.name]);
+  if (gap > 0.01) items.push(["Not in published Top 25 (per ETF)", gap, null]);
+  renderPieChart("chart-holdings", "chartHoldingsCanvas", "Top Holdings", items, {
+    legendLabelFn: (symbol, weight, name) =>
+      name ? `${symbol} · ${name} · ${weight.toFixed(2)}%` : `${symbol}: ${weight.toFixed(2)}%`,
+  });
 }
 
 // ---------------------------------------------------------------------
