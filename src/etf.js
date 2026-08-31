@@ -289,17 +289,28 @@ async function candidatePathsForSymbol(symbol, excludePath) {
 
 // Fallback country-allocation source for when stockanalysis.com has none
 // (neither the primary listing nor a cross-listing of the same index) —
-// e.g. bit/HEMA. UNVERIFIED against real justETF markup: this sandbox
-// can't reach justetf.com to test against it (same egress restriction as
-// the other external sites), so this is a best-effort implementation
-// built from general knowledge of the site, not confirmed real data.
-// It pushes [debug] notes at each step precisely so a failure is
-// diagnosable and fixable from real data, the same way the
-// stockanalysis.com integration was iterated on earlier.
+// e.g. bit/HEMA. Confirmed against a real captured request/response
+// (DevTools Network tab, live browser session) for IE000KCS7J59:
+//
+//   1. Search page for the ISIN: /en/search.html?query=<name>&search=ALL
+//   2. Fetch the profile page (/en/etf-profile.html?isin=<ISIN>) — this is
+//      an Apache Wicket app; the country table only fully loads via a
+//      stateful AJAX "load more" behavior, not in the initial page HTML.
+//      We need this fetch anyway for its Set-Cookie headers (JSESSIONID +
+//      the AWSALB load-balancer affinity cookie — Wicket page state lives
+//      server-side, keyed to a specific backend instance) and to read the
+//      *current* AJAX behavior URL out of the page's own inline JS (its
+//      numeric prefix may not be stable across sessions).
+//   3. Call that AJAX URL with the cookies from step 2 attached. The
+//      response is XML with the real data inside a <component> element's
+//      CDATA section: a <table data-testid="etf-holdings_countries_table">
+//      whose rows carry data-testid="tl_etf-holdings_countries_value_name"
+//      / "..._percentage" — confirmed real attribute names. This table is
+//      the *complete* list (its percentages summed to exactly 100% in the
+//      captured sample, including an "Other" catch-all row), not just the
+//      newly-added rows, so parsing this one response is enough.
 async function fetchCountryFromJustETF(fullName, notes) {
   try {
-    // Confirmed real URL (from a live Network-tab check): a page
-    // navigation, not an XHR/JSON endpoint.
     const searchUrl = `https://www.justetf.com/en/search.html?query=${encodeURIComponent(fullName)}&search=ALL`;
     const r = await fetch(searchUrl, { headers: { "User-Agent": UA, Accept: "text/html" } });
     if (!r.ok) {
@@ -321,12 +332,47 @@ async function fetchCountryFromJustETF(fullName, notes) {
       return {};
     }
     const profileHtml = await pr.text();
-    const countries = parseJustETFCountries(profileHtml);
+
+    // In case some listing's page already renders the full table (unlike
+    // the sample case), check for it directly before bothering with the
+    // AJAX round-trip.
+    let countries = parseJustETFCountriesTable(profileHtml);
     if (Object.keys(countries).length) {
-      notes.push(`country weights sourced from justETF (ISIN ${isin}) — stockanalysis.com had none for this listing`);
+      notes.push(`country weights sourced from justETF (ISIN ${isin}, initial page) — stockanalysis.com had none for this listing`);
       return countries;
     }
-    notes.push(`[debug] justETF profile for ISIN ${isin} fetched (${profileHtml.length} chars) but no country allocation pattern matched`);
+
+    const cookieHeader = buildCookieHeader(pr);
+    const ajaxMatch = profileHtml.match(/"u":"(\/en\/etf-profile\.html\?[^"]*holdingsSection-countries-loadMoreCountries[^"]*)"/);
+    if (!ajaxMatch) {
+      notes.push(`[debug] justETF profile (ISIN ${isin}) had no country table and no loadMoreCountries AJAX behavior found in its HTML`);
+      return {};
+    }
+    const ajaxPath = ajaxMatch[1].replace(/&amp;/g, "&");
+    const ajaxUrl = `https://www.justetf.com${ajaxPath}&_wicket=1&_=${Date.now()}`;
+
+    const ar = await fetch(ajaxUrl, {
+      headers: {
+        "User-Agent": UA,
+        Accept: "application/xml, text/xml, */*; q=0.01",
+        "X-Requested-With": "XMLHttpRequest",
+        "Wicket-Ajax": "true",
+        "Wicket-Ajax-BaseURL": `en/etf-profile.html?isin=${isin}`,
+        Referer: profileUrl,
+        Cookie: cookieHeader,
+      },
+    });
+    if (!ar.ok) {
+      notes.push(`[debug] justETF loadMoreCountries AJAX failed for ISIN ${isin}: HTTP ${ar.status}`);
+      return {};
+    }
+    const ajaxXml = await ar.text();
+    countries = parseJustETFCountriesTable(ajaxXml);
+    if (Object.keys(countries).length) {
+      notes.push(`country weights sourced from justETF (ISIN ${isin}, expanded list) — stockanalysis.com had none for this listing`);
+      return countries;
+    }
+    notes.push(`[debug] justETF loadMoreCountries AJAX for ISIN ${isin} returned ${ajaxXml.length} chars but no country rows matched`);
     return {};
   } catch (e) {
     notes.push(`[debug] justETF fetch threw: ${e.message}`);
@@ -334,27 +380,23 @@ async function fetchCountryFromJustETF(fullName, notes) {
   }
 }
 
-// Best-effort HTML scrape for a "Country" allocation list. Tries a couple
-// of plausible markup shapes since the real one isn't confirmed: a
-// <table> with <td>Name</td>...<td>NN.NN%</td> rows, and a generic
-// tag-agnostic "some tag containing a country-ish name, then within a
-// short distance another tag containing NN.NN%" pattern for a div/span
-// based layout instead of a real <table>. Unverified; see
-// fetchCountryFromJustETF above — this is a starting point to refine
-// once real markup is available, not a confirmed-working scrape.
-function parseJustETFCountries(html) {
-  let countries = extractNamePercentPairs(html, /<td[^>]*>\s*([A-Za-z][A-Za-z .'()&-]{1,40}?)\s*<\/td>\s*<td[^>]*>\s*([\d.,]+)\s*%/g);
-  if (!Object.keys(countries).length) {
-    // Fallback: no real <table>, e.g. a div/span-based layout — look for
-    // "...>Name<...NN.NN %..." within a short distance of each other,
-    // regardless of the specific tag.
-    countries = extractNamePercentPairs(html, />\s*([A-Za-z][A-Za-z .'()&-]{1,40}?)\s*<[^>]{0,80}?>\s*([\d.,]+)\s*%/g);
-  }
-  return countries;
+// Combines every Set-Cookie header from a Response into one Cookie header
+// value, so a follow-up request can present the same session/affinity
+// cookies (getSetCookie() is the modern multi-value accessor; the plain
+// get() fallback is a best-effort single-value version for runtimes
+// without it).
+function buildCookieHeader(response) {
+  const raw = typeof response.headers.getSetCookie === "function"
+    ? response.headers.getSetCookie()
+    : [response.headers.get("set-cookie")].filter(Boolean);
+  return raw.map((c) => c.split(";")[0]).filter(Boolean).join("; ");
 }
 
-function extractNamePercentPairs(html, rowRe) {
+// Confirmed real markup (captured live): rows carry these exact
+// data-testid attributes regardless of surrounding table/CDATA wrapping.
+function parseJustETFCountriesTable(html) {
   const countries = {};
+  const rowRe = /data-testid="tl_etf-holdings_countries_value_name">\s*([^<]+?)\s*<\/td>[\s\S]*?data-testid="tl_etf-holdings_countries_value_percentage">\s*([\d.,]+)\s*%/g;
   let m;
   while ((m = rowRe.exec(html)) && Object.keys(countries).length < 60) {
     const name = m[1].trim();
