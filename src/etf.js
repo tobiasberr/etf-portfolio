@@ -311,16 +311,21 @@ async function candidatePathsForSymbol(symbol, excludePath) {
 //      newly-added rows, so parsing this one response is enough.
 async function fetchCountryFromJustETF(fullName, notes) {
   try {
-    const searchUrl = `https://www.justetf.com/en/search.html?query=${encodeURIComponent(fullName)}&search=ALL`;
+    // Confirmed on bit/HEMA: searching the FULL official name (with the
+    // "UCITS ETF" suffix stockanalysis.com includes) found nothing, while
+    // a manual search without that boilerplate suffix did — strip it
+    // before querying, the same way a human would naturally shorten it.
+    const searchQuery = fullName.replace(/\bUCITS\s+ETF\b/gi, "").replace(/\bETF\b/gi, "").replace(/\s{2,}/g, " ").trim();
+    const searchUrl = `https://www.justetf.com/en/search.html?query=${encodeURIComponent(searchQuery)}&search=ALL`;
     const r = await fetch(searchUrl, { headers: { "User-Agent": UA, Accept: "text/html" } });
     if (!r.ok) {
-      notes.push(`[debug] justETF search failed for "${fullName}": HTTP ${r.status}`);
+      notes.push(`[debug] justETF search failed for "${searchQuery}": HTTP ${r.status}`);
       return {};
     }
     const searchHtml = await r.text();
     const isinMatch = searchHtml.match(/isin=([A-Z0-9]{12})/i);
     if (!isinMatch) {
-      notes.push(`[debug] justETF search for "${fullName}" found no ISIN link (response ${searchHtml.length} chars)`);
+      notes.push(`[debug] justETF search for "${searchQuery}" found no ISIN link (response ${searchHtml.length} chars)`);
       return {};
     }
     const isin = isinMatch[1].toUpperCase();
