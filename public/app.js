@@ -400,8 +400,10 @@ function renderOverviewChart(agg) {
   // No chart title — kept redundant with the "Aggregate — Portfolio
   // Overview" h2 above it. Legend and hover tooltip both show weight %
   // instead of the raw EUR value the slices are actually sized by.
+  // Legend on the right (not bottom) — extra height gives its ~11 items
+  // room as a vertical list instead of wrapped columns.
   renderPieChart("chart-overview", "chartOverviewCanvas", "", items, {
-    legendPosition: "bottom", widthPx: 760, heightPx: 420,
+    legendPosition: "right", widthPx: 760, heightPx: 460,
     legendLabelFn: weightLabel,
     tooltipLabelFn: weightLabel,
   });
@@ -409,17 +411,21 @@ function renderOverviewChart(agg) {
 
 function renderSectorChart(agg) {
   // No chart title — the "Aggregated Sector Weights" <h3> above it already says this.
+  const weightLabel = (label, value) => `${label}: ${value.toFixed(2)}%`;
   renderPieChart("chart-sector", "chartSectorCanvas", "", agg.sectorList, {
     widthPx: 640, heightPx: 400,
-    legendLabelFn: (label, value) => `${label}: ${value.toFixed(2)}%`,
+    legendLabelFn: weightLabel,
+    tooltipLabelFn: weightLabel,
   });
 }
 
 function renderCountryChart(agg) {
   // No chart title — the "Aggregated Country Weights" <h3> above it already says this.
+  const weightLabel = (label, value) => `${label}: ${value.toFixed(2)}%`;
   renderPieChart("chart-country", "chartCountryCanvas", "", agg.countryList, {
     widthPx: 640, heightPx: 400,
-    legendLabelFn: (label, value) => `${label}: ${value.toFixed(2)}%`,
+    legendLabelFn: weightLabel,
+    tooltipLabelFn: weightLabel,
   });
 }
 
@@ -431,11 +437,13 @@ function renderHoldingsChart(agg) {
   // name so the legend doesn't show the name twice.
   const items = agg.holdingsList.map((h) => [h.symbol || h.name, h.weightPct, h.symbol ? h.name : null]);
   if (gap > 0.01) items.push(["Not in published Top 25 (per ETF)", gap, null]);
+  const holdingLabel = (label, weight, name) =>
+    name ? `${label} · ${name} · ${weight.toFixed(2)}%` : `${label}: ${weight.toFixed(2)}%`;
   // No chart title — the "Aggregated Top Holdings" <h3> above it already says this.
   renderPieChart("chart-holdings", "chartHoldingsCanvas", "", items, {
     widthPx: "100%", heightPx: 480,
-    legendLabelFn: (label, weight, name) =>
-      name ? `${label} · ${name} · ${weight.toFixed(2)}%` : `${label}: ${weight.toFixed(2)}%`,
+    legendLabelFn: holdingLabel,
+    tooltipLabelFn: holdingLabel,
   });
 }
 
