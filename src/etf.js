@@ -186,6 +186,40 @@ function flattenStats(container) {
   return stats;
 }
 
+// The overview page's price isn't in infoBox/infoTable/trust/quote/stats
+// (confirmed against a real payload — those hold marketCap/EPS/P-E/AUM/
+// etc. but no price) — it lives somewhere else in the decoded nodes.
+// Rather than guess another fixed container name, search for whichever
+// object actually looks like a quote: something with a numeric "price"
+// plus at least one sibling field a quote header would have.
+const QUOTE_SIBLING_KEYS = ["change", "changePercent", "open", "high", "low", "close", "previousClose", "volume", "currency"];
+
+function findQuoteObject(nodes) {
+  const seen = new Set();
+  function walk(obj, depth) {
+    if (depth > 5 || obj == null || typeof obj !== "object" || seen.has(obj)) return null;
+    seen.add(obj);
+    if (!Array.isArray(obj)) {
+      const price = obj.price;
+      const hasSibling = QUOTE_SIBLING_KEYS.some((k) => k in obj);
+      if ((typeof price === "number" || typeof price === "string") && hasSibling) return obj;
+    }
+    const children = Array.isArray(obj) ? obj : Object.values(obj);
+    for (const child of children) {
+      if (child && typeof child === "object") {
+        const found = walk(child, depth + 1);
+        if (found) return found;
+      }
+    }
+    return null;
+  }
+  for (const node of nodes) {
+    const found = walk(node, 0);
+    if (found) return found;
+  }
+  return null;
+}
+
 function findStat(stats, ...keywords) {
   for (const [k, v] of Object.entries(stats)) {
     const kl = k.toLowerCase();
@@ -509,6 +543,14 @@ export async function loadEtf(exchange, symbol) {
         }
       }
     }
+
+    const quoteObj = findQuoteObject(ovNodes);
+    if (quoteObj) {
+      ovStats = { ...ovStats, ...flattenStats(quoteObj) };
+    } else {
+      notes.push("could not locate a price/quote object anywhere in the overview page data");
+    }
+
     const exp = findStat(ovStats, "expense");
     if (exp != null) {
       expenseRatio = typeof exp === "number" ? `${exp}%` : String(exp);
