@@ -421,8 +421,8 @@ export async function loadEtf(exchange, symbol) {
   }
 
   // Expense ratio: overview page only (confirmed not present on /holdings/).
-  // Also grab whatever price-like stat is on this page, as a fallback for
-  // when Yahoo Finance (queried below) has no data for this listing.
+  // Also grab whatever price-like stat is on this page — it's the primary
+  // price source below, ahead of the Yahoo Finance fallback.
   let ovStats = {};
   try {
     const overviewPath = `/quote/${exchange}/${symbol}/`;
@@ -445,20 +445,36 @@ export async function loadEtf(exchange, symbol) {
     notes.push(`overview page fetch failed: ${e.message}`);
   }
 
-  let { price, currency, error: priceError } = await fetchPrice(exchange, symbol);
+  // Primary source: the price stat already sitting in stockanalysis.com's
+  // own overview-page data (same page/data we already use for the expense
+  // ratio). "Currency" is an exact-label lookup too, in case the page
+  // exposes one directly; otherwise fall back to the currency the exchange
+  // itself trades in.
+  let price = numOrNull(findExactStat(ovStats, "price", "last price", "current price", "close", "last"));
+  let currency = null;
+  let priceError = null;
 
-  // Fallback: Yahoo Finance doesn't cover every listing (e.g. some ASX
-  // CDIs of US-domiciled funds) — if it came back empty, try the price
-  // stat already sitting in stockanalysis.com's own overview-page data,
-  // paired with the currency the exchange itself trades in.
+  if (price != null) {
+    const rawCurrency = findExactStat(ovStats, "currency");
+    currency = typeof rawCurrency === "string" && rawCurrency.trim()
+      ? rawCurrency.trim().toUpperCase()
+      : EXCHANGE_CURRENCY[exchange] || null;
+    if (!currency) {
+      notes.push(`stockanalysis.com price found (${price}) but currency unknown for exchange "${exchange}"`);
+      price = null;
+    }
+  }
+
+  // Fallback: Yahoo Finance, for listings stockanalysis.com's overview
+  // page didn't have a price stat for.
   if (price == null) {
-    const fallbackPrice = numOrNull(findExactStat(ovStats, "price", "last price", "current price", "close", "last"));
-    const fallbackCurrency = EXCHANGE_CURRENCY[exchange];
-    if (fallbackPrice != null && fallbackCurrency) {
-      price = fallbackPrice;
-      currency = fallbackCurrency;
-      notes.push(`price sourced from stockanalysis.com (Yahoo Finance had no data for this listing: ${priceError})`);
-      priceError = null;
+    const yahoo = await fetchPrice(exchange, symbol);
+    if (yahoo.price != null && yahoo.currency) {
+      price = yahoo.price;
+      currency = yahoo.currency;
+      notes.push("price sourced from Yahoo Finance (stockanalysis.com's overview page had no price stat)");
+    } else {
+      priceError = yahoo.error || "price unavailable";
     }
   }
 
