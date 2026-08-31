@@ -368,7 +368,7 @@ function renderPieChart(containerId, canvasId, title, items, opts) {
     },
     options: {
       plugins: {
-        title: { display: true, text: title },
+        title: { display: !!title, text: title || "" },
         legend: { position: legendPosition, labels: legendLabels },
       },
     },
@@ -386,14 +386,16 @@ function renderOverviewChart(agg) {
 }
 
 function renderSectorChart(agg) {
-  renderPieChart("chart-sector", "chartSectorCanvas", "Sector Weights", agg.sectorList, {
+  // No chart title — the "Aggregated Sector Weights" <h3> above it already says this.
+  renderPieChart("chart-sector", "chartSectorCanvas", "", agg.sectorList, {
     widthPx: 640, heightPx: 400,
     legendLabelFn: (label, value) => `${label}: ${value.toFixed(2)}%`,
   });
 }
 
 function renderCountryChart(agg) {
-  renderPieChart("chart-country", "chartCountryCanvas", "Country Weights", agg.countryList, {
+  // No chart title — the "Aggregated Country Weights" <h3> above it already says this.
+  renderPieChart("chart-country", "chartCountryCanvas", "", agg.countryList, {
     widthPx: 640, heightPx: 400,
     legendLabelFn: (label, value) => `${label}: ${value.toFixed(2)}%`,
   });
@@ -407,7 +409,8 @@ function renderHoldingsChart(agg) {
   // name so the legend doesn't show the name twice.
   const items = agg.holdingsList.map((h) => [h.symbol || h.name, h.weightPct, h.symbol ? h.name : null]);
   if (gap > 0.01) items.push(["Not in published Top 25 (per ETF)", gap, null]);
-  renderPieChart("chart-holdings", "chartHoldingsCanvas", "Top Holdings", items, {
+  // No chart title — the "Aggregated Top Holdings" <h3> above it already says this.
+  renderPieChart("chart-holdings", "chartHoldingsCanvas", "", items, {
     widthPx: "100%", heightPx: 480,
     legendLabelFn: (label, weight, name) =>
       name ? `${label} · ${name} · ${weight.toFixed(2)}%` : `${label}: ${weight.toFixed(2)}%`,
