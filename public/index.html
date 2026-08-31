@@ -8,12 +8,17 @@
 <style>
   body{font-family:-apple-system,Segoe UI,Arial,sans-serif;margin:2rem;color:#1a1a1a;background:#fafafa}
   h1{margin-bottom:0.2rem} h2{margin-top:2.5rem;border-bottom:2px solid #ddd;padding-bottom:.3rem}
-  h3{margin-top:2.5rem;margin-bottom:.05rem} h4{margin-bottom:.3rem}
+  h3{margin-top:3.5rem;margin-bottom:0} h4{margin-bottom:.3rem}
   a{color:#1a5fb4;text-decoration:none} a:hover{text-decoration:underline}
   table.tbl{border-collapse:collapse;width:100%;margin:.5rem 0 1rem;background:#fff}
   table.tbl th, table.tbl td{border:1px solid #ddd;padding:.4rem .6rem;text-align:left;font-size:.9rem;white-space:nowrap}
   table.tbl th{background:#f0f0f0}
   table.tbl td.num, table.tbl th.num{text-align:right}
+  table.tbl th.sortable{cursor:pointer;user-select:none}
+  table.tbl th.sortable:hover{background:#e4e4e4}
+  table.tbl th.sort-active{background:#e0e8f5}
+  .sort-icon{font-size:.75em;color:#999;margin-left:.15rem}
+  table.tbl th.sort-active .sort-icon{color:#1a5fb4}
   table.tbl input{width:100%;box-sizing:border-box;border:1px solid #ccc;border-radius:4px;padding:.25rem .4rem;font-size:.9rem}
   table.tbl input.shares{text-align:right}
   .row-remove{cursor:pointer;color:#c0392b;font-weight:bold;border:none;background:none;font-size:1rem}
@@ -35,7 +40,6 @@
 <p class="muted">Edit Symbol / Shares below and press Enter — the rest updates automatically.</p>
 <p class="hint">Symbol format: <code>exchange/TICKER</code>, e.g. <code>lon/EXUS</code>, <code>etr/SXR8</code>, <code>bit/FLXE</code>, <code>fra/ICGA</code>. A new empty row appears once you fill the last one.</p>
 
-<h2>Aggregate — Portfolio Overview</h2>
 <div id="chart-overview"></div>
 <div id="overview-table"></div>
 

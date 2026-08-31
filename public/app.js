@@ -22,6 +22,7 @@ let rows = [];
 let cashEur = 0;
 const cache = new Map();     // "exchange/symbol" -> {status:'loading'|'done'|'error', data, error}
 const charts = {};           // canvas id -> Chart.js instance
+let overviewSort = { column: null, dir: "asc" }; // column: one of OVERVIEW_SORT_KEYS below, or null
 
 // ---------------------------------------------------------------------
 // State persistence
@@ -223,6 +224,44 @@ function fmtEur(n) {
   return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+// Parses a displayed cell string back into a comparable number, for the
+// sortable overview-table columns — handles a trailing "%" (weight/expense
+// ratio/top10), a plain number (total holdings/P-E), and a "28.52M"/
+// "1.30B"-style magnitude suffix (assets). Returns null for "", "n/a", or
+// anything else unparseable, so it always sorts to the end regardless of
+// direction rather than being treated as zero.
+function numericSortKey(s) {
+  if (s == null) return null;
+  const str = String(s).trim();
+  if (!str || str.toLowerCase() === "n/a") return null;
+  const m = str.match(/^(-?[\d,]*\.?\d+)\s*([kmbt])?%?$/i);
+  if (!m) return null;
+  const n = parseFloat(m[1].replace(/,/g, ""));
+  if (!Number.isFinite(n)) return null;
+  const mult = { k: 1e3, m: 1e6, b: 1e9, t: 1e12 }[(m[2] || "").toLowerCase()];
+  return mult ? n * mult : n;
+}
+
+// Sortable overview-table columns: header index -> [sort key, field on the
+// row record holding that column's displayed string].
+const OVERVIEW_SORT_COLUMNS = {
+  6: ["weight", "weight"],
+  7: ["expenseRatio", "expRatio"],
+  8: ["totalHoldings", "totalHold"],
+  9: ["top10", "top10"],
+  10: ["assets", "assets"],
+  11: ["peRatio", "pe"],
+};
+
+function setOverviewSort(column) {
+  if (overviewSort.column === column) {
+    overviewSort.dir = overviewSort.dir === "asc" ? "desc" : "asc";
+  } else {
+    overviewSort = { column, dir: "asc" };
+  }
+  renderAll();
+}
+
 function renderOverviewTable(agg) {
   const headers = ["", "Full Name", "Symbol", "Shares", "Price/Share", "Value (EUR)", "Weight %",
     "Expense Ratio", "Total Holdings", "Top 10 Holdings Percentage", "Assets", "P/E Ratio"];
@@ -231,10 +270,23 @@ function renderOverviewTable(agg) {
   const weightStr = (v) => (v != null && total ? `${((v / total) * 100).toFixed(2)}%` : "");
 
   let html = '<table class="tbl"><thead><tr>';
-  headers.forEach((h, i) => { html += `<th${rightCols.has(i) ? ' class="num"' : ""}>${h}</th>`; });
+  headers.forEach((h, i) => {
+    const sortEntry = OVERVIEW_SORT_COLUMNS[i];
+    if (!sortEntry) {
+      html += `<th${rightCols.has(i) ? ' class="num"' : ""}>${h}</th>`;
+      return;
+    }
+    const [key] = sortEntry;
+    const active = overviewSort.column === key;
+    const icon = active ? (overviewSort.dir === "asc" ? "▲" : "▼") : "⇅";
+    html += `<th class="num sortable${active ? " sort-active" : ""}" onclick="setOverviewSort('${key}')">${h} <span class="sort-icon">${icon}</span></th>`;
+  });
   html += "</tr></thead><tbody>";
 
-  rows.forEach((row, idx) => {
+  // Build a display record per row first (in rows[] order) — sorting
+  // reorders the RENDERED rows, not the underlying rows[] array itself,
+  // so each record keeps its original idx for the row's input handlers.
+  const records = rows.map((row, idx) => {
     const isEmptyRow = !row.exchange && !row.symbol;
     const symbolValue = row.exchange && row.symbol ? `${row.exchange}/${row.symbol}` : (row.rawSymbolInput || "");
     const entry = row.exchange && row.symbol ? cache.get(cacheKey(row.exchange, row.symbol)) : null;
@@ -260,19 +312,45 @@ function renderOverviewTable(agg) {
       pe = data.peRatio;
     }
 
+    return {
+      idx, isEmptyRow, symbolValue, shares, valueEur, priceStr, fullNameCell,
+      weight: weightStr(valueEur), expRatio, totalHold, top10, assets, pe,
+    };
+  });
+
+  // The trailing empty "add a row" entry always renders last, unsorted.
+  const dataRecords = records.filter((r) => !r.isEmptyRow);
+  const emptyRecords = records.filter((r) => r.isEmptyRow);
+
+  if (overviewSort.column) {
+    const sortEntry = Object.values(OVERVIEW_SORT_COLUMNS).find(([key]) => key === overviewSort.column);
+    const field = sortEntry[1];
+    const dir = overviewSort.dir === "asc" ? 1 : -1;
+    dataRecords.sort((a, b) => {
+      const av = numericSortKey(a[field]);
+      const bv = numericSortKey(b[field]);
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1;  // n/a (unparseable) always sorts last, either direction
+      if (bv == null) return -1;
+      return (av - bv) * dir;
+    });
+  }
+
+  dataRecords.concat(emptyRecords).forEach((r) => {
+    const { idx } = r;
     html += "<tr>";
-    html += isEmptyRow ? "<td></td>" : `<td><button class="row-remove" onclick="removeRow(${idx})" title="Remove row">✕</button></td>`;
-    html += `<td>${fullNameCell}</td>`;
-    html += `<td><input type="text" value="${escapeHtml(symbolValue)}" placeholder="lon/EXUS" oninput="onSymbolInput(${idx}, this.value)" onchange="commitRow(${idx})" onkeydown="commitOnEnter(event, () => commitRow(${idx}))"></td>`;
-    html += `<td class="num"><input class="shares" type="number" value="${shares}" placeholder="shares" oninput="onSharesInput(${idx}, this.value)" onchange="commitRow(${idx})" onkeydown="commitOnEnter(event, () => commitRow(${idx}))"></td>`;
-    html += `<td class="num">${priceStr}</td>`;
-    html += `<td class="num">${valueEur != null ? fmtEur(valueEur) : ""}</td>`;
-    html += `<td class="num">${weightStr(valueEur)}</td>`;
-    html += `<td class="num">${expRatio}</td>`;
-    html += `<td class="num">${totalHold}</td>`;
-    html += `<td class="num">${top10}</td>`;
-    html += `<td class="num">${assets}</td>`;
-    html += `<td class="num">${pe}</td>`;
+    html += r.isEmptyRow ? "<td></td>" : `<td><button class="row-remove" onclick="removeRow(${idx})" title="Remove row">✕</button></td>`;
+    html += `<td>${r.fullNameCell}</td>`;
+    html += `<td><input type="text" value="${escapeHtml(r.symbolValue)}" placeholder="lon/EXUS" oninput="onSymbolInput(${idx}, this.value)" onchange="commitRow(${idx})" onkeydown="commitOnEnter(event, () => commitRow(${idx}))"></td>`;
+    html += `<td class="num"><input class="shares" type="number" value="${r.shares}" placeholder="shares" oninput="onSharesInput(${idx}, this.value)" onchange="commitRow(${idx})" onkeydown="commitOnEnter(event, () => commitRow(${idx}))"></td>`;
+    html += `<td class="num">${r.priceStr}</td>`;
+    html += `<td class="num">${r.valueEur != null ? fmtEur(r.valueEur) : ""}</td>`;
+    html += `<td class="num">${r.weight}</td>`;
+    html += `<td class="num">${r.expRatio}</td>`;
+    html += `<td class="num">${r.totalHold}</td>`;
+    html += `<td class="num">${r.top10}</td>`;
+    html += `<td class="num">${r.assets}</td>`;
+    html += `<td class="num">${r.pe}</td>`;
     html += "</tr>";
   });
 
