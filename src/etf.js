@@ -247,15 +247,27 @@ async function candidatePathsForSymbol(symbol, excludePath) {
 
 async function fetchPrice(exchange, symbol) {
   const suffix = YAHOO_SUFFIX[exchange];
-  if (suffix == null) return { price: null, currency: null };
+  if (suffix == null) {
+    return { price: null, currency: null, error: `no Yahoo Finance exchange mapping for "${exchange}"` };
+  }
   const yahooSymbol = suffix ? `${symbol}.${suffix}` : symbol;
   try {
     const r = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${yahooSymbol}`, {
       headers: { "User-Agent": UA, Accept: "application/json" },
     });
-    if (!r.ok) return { price: null, currency: null };
+    if (!r.ok) {
+      return { price: null, currency: null, error: `Yahoo chart lookup for ${yahooSymbol} failed: HTTP ${r.status}` };
+    }
     const j = await r.json();
-    const meta = j.chart.result[0].meta;
+    if (j.chart && j.chart.error) {
+      const desc = j.chart.error.description || JSON.stringify(j.chart.error);
+      return { price: null, currency: null, error: `Yahoo chart lookup for ${yahooSymbol}: ${desc}` };
+    }
+    const result = j.chart && j.chart.result && j.chart.result[0];
+    const meta = result && result.meta;
+    if (!meta || meta.regularMarketPrice == null) {
+      return { price: null, currency: null, error: `Yahoo returned no price for ${yahooSymbol} — ticker may not exist under that suffix` };
+    }
     let price = meta.regularMarketPrice;
     let currency = meta.currency;
     const majorUnit = SUBUNIT_CURRENCY[currency];
@@ -263,9 +275,9 @@ async function fetchPrice(exchange, symbol) {
       price = price / 100;
       currency = majorUnit;
     }
-    return { price, currency };
+    return { price, currency, error: null };
   } catch (e) {
-    return { price: null, currency: null };
+    return { price: null, currency: null, error: `Yahoo chart fetch for ${yahooSymbol} threw: ${e.message}` };
   }
 }
 
@@ -399,7 +411,7 @@ export async function loadEtf(exchange, symbol) {
     notes.push(`overview page fetch failed: ${e.message}`);
   }
 
-  const { price, currency } = await fetchPrice(exchange, symbol);
+  const { price, currency, error: priceError } = await fetchPrice(exchange, symbol);
   let priceEur = null;
   if (price != null && currency) {
     try {
@@ -409,7 +421,7 @@ export async function loadEtf(exchange, symbol) {
       notes.push(`FX conversion failed for ${currency}: ${e.message}`);
     }
   } else {
-    notes.push("price unavailable");
+    notes.push(priceError || "price unavailable");
   }
 
   return {
