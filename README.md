@@ -1,9 +1,11 @@
 # etf-portfolio
 
-ETF Portfolio Report — an interactive Cloudflare Pages site. Edit the
+ETF Portfolio Report — an interactive Cloudflare Worker site. Edit the
 Symbol and Shares columns directly in the browser, and everything else
 (price, value, sector/country weights, holdings, pie charts) updates
 automatically. A new empty row appears whenever you fill in the last one.
+
+**Live:** https://etf-portfolio.tobiasberr.workers.dev
 
 ## How it's built
 
@@ -66,7 +68,7 @@ assets live. Every push to the connected branch redeploys automatically.
   its actual composition. The Top Holdings pie chart makes this explicit
   with a "Not in published Top 25" slice.
 - If stockanalysis.com doesn't publish a sector/country breakdown for a
-  specific listing, the Function tries other listings of the same ticker
+  specific listing, the Worker tries other listings of the same ticker
   (e.g. a US listing) as a fallback — this is noted under "Data Notes" for
   that ETF when it happens.
 - Price comes from Yahoo Finance's public (but unofficial) chart endpoint,
