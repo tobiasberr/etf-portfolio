@@ -233,19 +233,21 @@ function pct(v) {
   return Number(v);
 }
 
+// Returns { name, debug } — debug is a human-readable reason whenever
+// name is null, so a failure here is diagnosable from the UI instead of
+// silently falling back to the bare ticker.
 async function fetchTitleName(path) {
   try {
     const r = await fetch(`https://stockanalysis.com${path}`, { headers: { "User-Agent": UA } });
-    if (!r.ok) return null;
+    if (!r.ok) return { name: null, debug: `HTTP ${r.status}` };
     const html = await r.text();
     const m = html.match(/<title>([^<]*)<\/title>/i);
-    if (m) {
-      const title = m[1].trim();
-      if (title.includes(" - ")) return title.split(" - ").slice(1).join(" - ").trim();
-    }
-    return null;
+    if (!m) return { name: null, debug: "no <title> tag found" };
+    const title = m[1].trim();
+    if (!title.includes(" - ")) return { name: null, debug: `title had no " - " separator: "${title}"` };
+    return { name: title.split(" - ").slice(1).join(" - ").trim(), debug: null };
   } catch (e) {
-    return null;
+    return { name: null, debug: `fetch threw: ${e.message}` };
   }
 }
 
@@ -354,9 +356,23 @@ export async function loadEtf(exchange, symbol) {
 
   const sourceUrl = `https://stockanalysis.com${holdingsPageMissing ? overviewPath : holdingsPath}`;
 
-  let fullName = holdingsPageMissing ? null : await fetchTitleName(holdingsPath);
-  if (!fullName) fullName = await fetchTitleName(overviewPath);
-  if (!fullName) fullName = `${exchange.toUpperCase()}:${symbol}`;
+  let fullName = null;
+  const fullNameDebug = [];
+  if (!holdingsPageMissing) {
+    const r1 = await fetchTitleName(holdingsPath);
+    fullName = r1.name;
+    if (r1.debug) fullNameDebug.push(`holdings page: ${r1.debug}`);
+  }
+  if (!fullName) {
+    const r2 = await fetchTitleName(overviewPath);
+    fullName = r2.name;
+    if (r2.debug) fullNameDebug.push(`overview page: ${r2.debug}`);
+  }
+  if (!fullName) {
+    fullName = `${exchange.toUpperCase()}:${symbol}`;
+    // TEMPORARY DIAGNOSTIC — remove once confirmed against real data.
+    if (fullNameDebug.length) notes.push(`[debug] full name lookup failed — ${fullNameDebug.join("; ")}`);
+  }
 
   if (data) {
     for (const h of (data.holdings || []).slice(0, 25)) {
@@ -473,6 +489,12 @@ export async function loadEtf(exchange, symbol) {
     }
     if (totalHoldings === "n/a" && ovStats.count != null) {
       totalHoldings = String(ovStats.count);
+    }
+    // TEMPORARY DIAGNOSTIC — remove once field names are confirmed against
+    // real data. Dumps the overview page's actual stat keys/values so we
+    // can see what it's really called instead of guessing again.
+    if (assets === "n/a" || peRatio === "n/a") {
+      notes.push(`[debug] overview page ovStats: ${JSON.stringify(ovStats).slice(0, 1500)}`);
     }
   } catch (e) {
     notes.push(`overview page fetch failed: ${e.message}`);
