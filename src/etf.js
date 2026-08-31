@@ -58,27 +58,6 @@ const YAHOO_SUFFIX = {
   jse: "JO", // South Africa (ZAR)
 };
 
-// Currency each exchange trades in — used to interpret a price pulled from
-// stockanalysis.com's own page (see the price fallback in loadEtf below),
-// since that page shows a bare number with no machine-readable currency code.
-const EXCHANGE_CURRENCY = {
-  nyse: "USD", nasdaq: "USD", amex: "USD", nyseamerican: "USD", otc: "USD",
-  tsx: "CAD", tsxv: "CAD", cse: "CAD", neo: "CAD",
-  bvmf: "BRL", bcba: "ARS", bmv: "MXN",
-  lon: "GBP", ise: "EUR",
-  etr: "EUR", fra: "EUR", ber: "EUR", stu: "EUR", mun: "EUR", dus: "EUR",
-  bit: "EUR", par: "EUR", ams: "EUR", bru: "EUR", lis: "EUR", mce: "EUR", bme: "EUR",
-  vie: "EUR", hel: "EUR",
-  swx: "CHF", vtx: "CHF",
-  sto: "SEK", cph: "DKK", osl: "NOK", wse: "PLN",
-  asx: "AUD", nzx: "NZD",
-  hkg: "HKD", tyo: "JPY", tse: "JPY", sgx: "SGD",
-  nse: "INR", bse: "INR",
-  krx: "KRW", kosdaq: "KRW",
-  twse: "TWD", tpex: "TWD",
-  tlv: "ILS", jse: "ZAR",
-};
-
 // Some listings quote in a fractional subunit (e.g. British pence) rather
 // than the currency's major unit — normalize those to match frankfurter.app.
 const SUBUNIT_CURRENCY = {
@@ -533,6 +512,7 @@ export async function loadEtf(exchange, symbol) {
   // a fallback for assets/peRatio/top10Pct/totalHoldings whenever the
   // holdings page didn't have them (including when it's missing entirely).
   let ovStats = {};
+  let quoteObj = null;
   try {
     const ovNodes = await fetchPageNodes(overviewPath);
     for (const obj of ovNodes) {
@@ -544,7 +524,7 @@ export async function loadEtf(exchange, symbol) {
       }
     }
 
-    const quoteObj = findQuoteObject(ovNodes);
+    quoteObj = findQuoteObject(ovNodes);
     if (quoteObj) {
       ovStats = { ...ovStats, ...flattenStats(quoteObj) };
     } else {
@@ -582,34 +562,40 @@ export async function loadEtf(exchange, symbol) {
     notes.push(`overview page fetch failed: ${e.message}`);
   }
 
-  // Primary source: the price stat already sitting in stockanalysis.com's
-  // own overview-page data (same page/data we already use for the expense
-  // ratio). "Currency" is an exact-label lookup too, in case the page
-  // exposes one directly; otherwise fall back to the currency the exchange
-  // itself trades in.
-  let price = numOrNullLoose(findExactStat(ovStats, "price", "last price", "current price", "close", "last"));
+  // Primary source: the quote object found on stockanalysis.com's own
+  // overview page. Price and currency MUST come from that same object,
+  // never mixed with a currency guessed from elsewhere — confirmed on
+  // lon/EXUS that stockanalysis.com can display a price in a DIFFERENT
+  // currency than the exchange's own local trading currency ("Currency
+  // is GBP · Price in USD" — a UK-listed fund priced in USD there), so
+  // an exchange->currency fallback table would silently pair a real
+  // price number with the wrong currency and produce a plausible-looking
+  // but wrong EUR conversion. A stockanalysis price with no matching
+  // currency on the same object is discarded rather than guessed at.
+  let price = null;
   let currency = null;
   let priceError = null;
 
-  if (price != null) {
-    const rawCurrency = findExactStat(ovStats, "currency");
-    currency = typeof rawCurrency === "string" && rawCurrency.trim()
-      ? rawCurrency.trim().toUpperCase()
-      : EXCHANGE_CURRENCY[exchange] || null;
-    if (!currency) {
-      notes.push(`stockanalysis.com price found (${price}) but currency unknown for exchange "${exchange}"`);
-      price = null;
+  if (quoteObj) {
+    const saPrice = numOrNullLoose(quoteObj.price);
+    const rawCurrency = quoteObj.currency ?? quoteObj.priceCurrency ?? quoteObj.quoteCurrency ?? quoteObj.displayCurrency;
+    const saCurrency = typeof rawCurrency === "string" && rawCurrency.trim() ? rawCurrency.trim().toUpperCase() : null;
+    if (saPrice != null && saCurrency) {
+      price = saPrice;
+      currency = saCurrency;
+    } else if (saPrice != null) {
+      notes.push(`stockanalysis.com price found (${saPrice}) but no currency field on the same quote object — not using it, to avoid pairing it with the wrong currency`);
     }
   }
 
   // Fallback: Yahoo Finance, for listings stockanalysis.com's overview
-  // page didn't have a price stat for.
+  // page didn't have a usable price+currency pair for.
   if (price == null) {
     const yahoo = await fetchPrice(exchange, symbol);
     if (yahoo.price != null && yahoo.currency) {
       price = yahoo.price;
       currency = yahoo.currency;
-      notes.push("price sourced from Yahoo Finance (stockanalysis.com's overview page had no price stat)");
+      notes.push("price sourced from Yahoo Finance (no usable price+currency from stockanalysis.com's overview page)");
     } else {
       priceError = yahoo.error || "price unavailable";
     }
